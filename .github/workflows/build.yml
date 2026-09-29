@@ -54,7 +54,6 @@ jobs:
           TEST_JAVA: ${{ matrix.java }}
         run: >
           ./gradlew :core:test --console=plain
-          -Dorg.gradle.java.home="$JAVA_HOME_25_X64"
           -Ptailgate.testJava="$TEST_JAVA"
           -Porg.gradle.java.installations.fromEnv="JAVA_HOME_${TEST_JAVA}_X64"
           -Porg.gradle.java.installations.auto-download=false
@@ -86,7 +85,7 @@ jobs:
           NODES: ${{ matrix.nodes }}
         run: |
           tasks=$(echo "$NODES" | tr ',' '\n' | sed 's/^/:ui:/; s/$/:collectNode/')
-          ./gradlew $tasks --console=plain -Dorg.gradle.java.home="$JAVA_HOME" -Ptailgate.nodes="$NODES"
+          ./gradlew $tasks --console=plain -Ptailgate.nodes="$NODES"
       - uses: actions/upload-artifact@v7
         with:
           name: nodes-${{ matrix.id }}
@@ -111,7 +110,7 @@ jobs:
           merge-multiple: true
           path: build/nodes
       - name: Merge and verify
-        run: ./gradlew mergeJar verifyJar --console=plain -Dorg.gradle.java.home="$JAVA_HOME" -Ptailgate.prebuiltNodes=true
+        run: ./gradlew mergeJar verifyJar --console=plain -Ptailgate.prebuiltNodes=true
       - uses: actions/upload-artifact@v7
         with:
           name: tailgate-jar
