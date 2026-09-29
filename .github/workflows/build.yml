@@ -1,0 +1,180 @@
+name: Build
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      all-runtime:
+        description: Runtime-test every node instead of the smoke set
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.matrix.outputs.build }}
+      runtime: ${{ steps.matrix.outputs.runtime }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: matrix
+        # Tags and manual runs with all-runtime launch every node; other runs launch the smoke set.
+        env:
+          ALL_RUNTIME: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.all-runtime }}
+        run: python3 scripts/ci-matrix.py $([ "$ALL_RUNTIME" = true ] && echo --all-runtime) >> "$GITHUB_OUTPUT"
+
+  core:
+    name: core tests (Java ${{ matrix.java }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java: [8, 17, 21, 25]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          # The last version listed becomes JAVA_HOME; Gradle itself runs on 25.
+          java-version: |
+            ${{ matrix.java }}
+            25
+      - uses: gradle/actions/setup-gradle@v6
+      - env:
+          TEST_JAVA: ${{ matrix.java }}
+        run: >
+          ./gradlew :core:test --console=plain
+          -Dorg.gradle.java.home="$JAVA_HOME_25_X64"
+          -Ptailgate.testJava="$TEST_JAVA"
+          -Porg.gradle.java.installations.fromEnv="JAVA_HOME_${TEST_JAVA}_X64"
+          -Porg.gradle.java.installations.auto-download=false
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: core-test-report-java${{ matrix.java }}
+          path: core/build/reports/tests
+
+  nodes:
+    name: nodes (${{ matrix.name }})
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.build) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 25
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/master' }}
+      - name: Build UI nodes
+        env:
+          NODES: ${{ matrix.nodes }}
+        run: |
+          tasks=$(echo "$NODES" | tr ',' '\n' | sed 's/^/:ui:/; s/$/:collectNode/')
+          ./gradlew $tasks --console=plain -Dorg.gradle.java.home="$JAVA_HOME" -Ptailgate.nodes="$NODES"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nodes-${{ matrix.id }}
+          path: build/nodes/*.jar
+          if-no-files-found: error
+
+  merge:
+    needs: [nodes, core]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 25
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/master' }}
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: nodes-*
+          merge-multiple: true
+          path: build/nodes
+      - name: Merge and verify
+        run: ./gradlew mergeJar verifyJar --console=plain -Dorg.gradle.java.home="$JAVA_HOME" -Ptailgate.prebuiltNodes=true
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tailgate-jar
+          path: build/libs/tailgate-*.jar
+          if-no-files-found: error
+
+  runtime:
+    name: runtime (${{ matrix.node }})
+    needs: [plan, merge]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ${{ fromJSON(needs.plan.outputs.runtime) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          # runtime-test.py picks each release's Java from the JAVA_HOME_<N>_X64 variables.
+          java-version: |
+            8
+            17
+            21
+            25
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: true
+      - uses: astral-sh/setup-uv@v10
+      - name: Install Xvfb
+        # LWJGL 2 (Minecraft 1.12 and older) queries display modes through xrandr.
+        run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb x11-xserver-utils
+      - uses: actions/download-artifact@v8
+        with:
+          name: tailgate-jar
+          path: build/libs
+      - name: Launch Minecraft with the self-test
+        env:
+          NODE: ${{ matrix.node }}
+        run: xvfb-run -a uv run scripts/runtime-test.py "$NODE" --timeout 900
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: runtime-${{ matrix.node }}
+          path: |
+            build/runtime-test/run/${{ matrix.node }}/game.log
+            build/runtime-test/run/${{ matrix.node }}/tailgate-selftest.txt
+            build/runtime-test/run/${{ matrix.node }}/logs/
+            build/runtime-test/fixture.log
+          if-no-files-found: ignore
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [merge, runtime]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: tailgate-jar
+          path: dist
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: dist/tailgate-*.jar
+          generate_release_notes: true
