@@ -20,6 +20,20 @@ object Metadata {
             |displayTest = "IGNORE_ALL_VERSION"
             |""".trimMargin()
         return mapOf(
+            // Forge and NeoForge load every mod jar as a resource pack and warn at startup without this.
+            // One declaration covers every pack format: 26.x reads min/max_format, 1.20.2-1.21.8 read
+            // supported_formats, older versions read pack_format (and don't range-check mod packs).
+            "pack.mcmeta" to """
+                |{
+                |  "pack": {
+                |    "description": "Tailgate",
+                |    "pack_format": 15,
+                |    "supported_formats": [15, 999],
+                |    "min_format": 15,
+                |    "max_format": 999
+                |  }
+                |}
+                |""".trimMargin(),
             "fabric.mod.json" to """
                 |{
                 |  "schemaVersion": 1,
