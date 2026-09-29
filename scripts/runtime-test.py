@@ -22,7 +22,9 @@ Java: the version's own requirement is looked up from `--java N=<home>`, then th
 `JAVA_HOME_<N>_X64`/`_AARCH64` variables GitHub's setup-java exports, then `JAVA_HOME`.
 """
 import argparse
+import concurrent.futures
 import glob
+import hashlib
 import json
 import os
 import platform
@@ -42,6 +44,8 @@ LOADER_IDS = {"fabric": "fabric-loader", "forge": "forge", "neoforge": "neoforge
 IS_WINDOWS = os.name == "nt"
 OS_NAME = "windows" if IS_WINDOWS else "osx" if sys.platform == "darwin" else "linux"
 IS_ARM = platform.machine().lower() in ("arm64", "aarch64")
+# Gradle (for the fixture) and HeadlessMC run on the JDK the build uses.
+BUILD_JAVA = 25
 
 
 def main():
@@ -70,7 +74,7 @@ def main():
     fixture_dir = os.path.join(ROOT, "core", "build", "selftest-fixture")
     make_dirs(work)
     fixture_log = open_log(os.path.join(work, "fixture.log"))
-    fixture = start_fixture(fixture_dir, java_home(17, javas, at_least=True), fixture_log)
+    fixture = start_fixture(fixture_dir, java_home(BUILD_JAVA, javas, at_least=True), fixture_log)
     try:
         address = wait_for_file(os.path.join(fixture_dir, "address.txt"), 300, fixture).strip()
         gamedir = prepare_gamedir(os.path.join(work, "run", args.node), jar)
@@ -109,12 +113,9 @@ def install(work, mcdir, mc, loader, loader_version, javas):
     if not os.path.exists(hmc):
         make_dirs(work)
         print(f"Downloading HeadlessMC {HMC_VERSION}")
-        try:
-            urllib.request.urlretrieve(HMC_URL, hmc + ".part")
-            os.replace(hmc + ".part", hmc)
-        except OSError as e:
-            abort(f"couldn't download HeadlessMC: {e}")
-    hmc_java = java_for(17, javas, at_least=True)
+        if not fetch(HMC_URL, hmc):
+            abort("couldn't download HeadlessMC")
+    hmc_java = java_for(BUILD_JAVA, javas, at_least=True)
     write_text(os.path.join(work, "HeadlessMC", "config.properties"), "\n".join([
         f"hmc.java.versions={';'.join(sorted(set(java_exe(h) for h in javas.values())) or [hmc_java])}",
         f"hmc.mcdir={fwd(mcdir)}",
@@ -278,7 +279,8 @@ def launch(mcdir, version, gamedir, java, extra_jvm, log, timeout):
     libdir = os.path.join(mcdir, "libraries")
     natives = os.path.join(gamedir, "natives")
     make_dirs(natives)
-    cp, seen = [], set()
+    # HeadlessMC downloads libraries when it launches, not when it installs, so fetch them here.
+    cp, natives_jars, downloads, seen = [], [], {}, set()
     for data in versions:
         for lib in data.get("libraries", []):
             if not rules_ok(lib.get("rules")):
@@ -288,7 +290,8 @@ def launch(mcdir, version, gamedir, java, extra_jvm, log, timeout):
             classifier = parts[3] if len(parts) > 3 else None
             if classifier and not native_classifier_ok(classifier):
                 continue
-            key = (group, artifact, classifier)
+            # 1.14–1.18 list a library's natives as a second entry with the same name.
+            key = (group, artifact, classifier, "natives" in lib)
             if key in seen:
                 continue
             seen.add(key)
@@ -297,23 +300,35 @@ def launch(mcdir, version, gamedir, java, extra_jvm, log, timeout):
             if native:
                 native = native.replace("${arch}", "64")
                 info = lib.get("downloads", {}).get("classifiers", {}).get(native, {})
-                path = os.path.join(libdir, info["path"]) if "path" in info else \
-                    maven_path(libdir, group, artifact, ver, native)
-                if os.path.exists(path):
-                    extract_natives(path, natives, lib.get("extract", {}).get("exclude", []))
+                path = library_file(libdir, lib, info, group, artifact, ver, native, downloads)
+                natives_jars.append((path, lib.get("extract", {}).get("exclude", [])))
             download = lib.get("downloads", {}).get("artifact")
             if lib.get("downloads") and not download:
                 continue
-            path = os.path.join(libdir, download["path"]) if download and download.get("path") else \
-                maven_path(libdir, group, artifact, ver, classifier)
-            if os.path.exists(path):
-                cp.append(path)
-            else:
-                print("missing library", path)
-    client = os.path.join(mcdir, "versions", base["id"], base["id"] + ".jar")
+            cp.append(library_file(libdir, lib, download or {}, group, artifact, ver, classifier, downloads))
+    # Like Mojang's launcher, run the client jar under the launched version's name: Forge 1.17+
+    # keeps it off the module path by that name (-DignoreList=...,${version_name}.jar).
+    base_client = os.path.join(mcdir, "versions", base["id"], base["id"] + ".jar")
+    client = os.path.join(mcdir, "versions", version, version + ".jar")
+    client_download = base.get("downloads", {}).get("client", {})
+    if not os.path.exists(client) and not os.path.exists(base_client) and client_download.get("url"):
+        downloads[base_client] = (client_download["url"], client_download.get("sha1"))
+
+    if downloads:
+        print(f"Downloading {len(downloads)} libraries")
+        with concurrent.futures.ThreadPoolExecutor(8) as pool:
+            list(pool.map(lambda item: fetch(item[1][0], item[0], item[1][1]), downloads.items()))
     if not os.path.exists(client):
-        client = os.path.join(mcdir, "versions", version, version + ".jar")
+        if not os.path.exists(base_client):
+            abort(f"no client jar for {base['id']}")
+        copy_file(base_client, client)
     cp.append(client)
+    for path in [p for p in cp if not os.path.exists(p)]:
+        print("missing library", path)
+        cp.remove(path)
+    for path, excludes in natives_jars:
+        if os.path.exists(path):
+            extract_natives(path, natives, excludes)
 
     assets = os.path.join(mcdir, "assets")
     index = os.path.join(assets, "indexes", base.get("assets", "legacy") + ".json")
@@ -367,6 +382,45 @@ def launch(mcdir, version, gamedir, java, extra_jvm, log, timeout):
 def maven_path(libdir, group, artifact, ver, classifier):
     name = f"{artifact}-{ver}" + (f"-{classifier}" if classifier else "") + ".jar"
     return os.path.join(libdir, *group.split("."), artifact, ver, name)
+
+
+def library_file(libdir, lib, info, group, artifact, ver, classifier, downloads):
+    """Returns where a library lives, queueing it in [downloads] if it's missing and has a source."""
+    path = os.path.join(libdir, info["path"]) if info.get("path") else \
+        maven_path(libdir, group, artifact, ver, classifier)
+    if os.path.exists(path):
+        return path
+    url = info.get("url")
+    if url is None and not lib.get("downloads"):
+        # Old version files name only a Maven repository (Mojang's when absent).
+        base = lib.get("url", "https://libraries.minecraft.net/").rstrip("/") + "/"
+        url = base + os.path.relpath(path, libdir).replace(os.sep, "/")
+    if url:
+        downloads[path] = (url, info.get("sha1"))
+    return path
+
+
+def fetch(url, path, sha1=None, attempts=3):
+    """Downloads [url] to [path], checking [sha1] when given; returns whether it succeeded."""
+    make_dirs(os.path.dirname(path))
+    part = path + ".part"
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as response, open(part, "wb") as out:
+                shutil.copyfileobj(response, out)
+            if sha1:
+                with open(part, "rb") as f:
+                    # Mojang's version files only publish SHA-1; this catches truncated downloads.
+                    if hashlib.new("sha1", f.read(), usedforsecurity=False).hexdigest() != sha1:
+                        raise OSError("checksum mismatch")
+            os.replace(part, path)
+            return True
+        except OSError as e:  # URLError and HTTPError are OSErrors
+            if getattr(e, "code", None) == 404 or attempt == attempts - 1:
+                print(f"couldn't download {url}: {e}")
+                return False
+            time.sleep(2 ** attempt)
+    return False
 
 
 def extract_natives(jar, target, excludes):
@@ -455,6 +509,14 @@ def write_text(path, text):
             f.write(text)
     except OSError as e:
         abort(f"can't write {path}: {e}")
+
+
+def copy_file(source, target):
+    try:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        shutil.copyfile(source, target)
+    except OSError as e:
+        abort(f"can't copy {source} to {target}: {e}")
 
 
 def open_log(path):
