@@ -3,7 +3,7 @@
 # ///
 """Runs the in-game Tailgate self-test for one Minecraft version and loader, unattended.
 
-    uv run scripts/runtime-test.py 26.3-fabric --java 25=/path/to/jdk-25
+    uv run scripts/runtime-test.py 26.3-fabric
 
 What it does:
   1. Installs Minecraft and the loader with HeadlessMC (downloaded on first use).
@@ -18,8 +18,12 @@ process tree. Launching bypasses HeadlessMC's `-lwjgl` mode, whose ASM can't rea
 classes in LWJGL 3.4.3 (Minecraft 26.x), so the game needs a display: on Linux CI wrap this
 script in `xvfb-run`; elsewhere a window opens briefly.
 
-Java: the version's own requirement is looked up from `--java N=<home>`, then the
-`JAVA_HOME_<N>_X64`/`_AARCH64` variables GitHub's setup-java exports, then `JAVA_HOME`.
+Java: each major version's JDK comes from `--java N=<home>`, then the
+`JAVA_HOME_<N>_X64`/`_AARCH64` variables GitHub's setup-java exports, then JDKs found in
+standard install locations (~/.jdks, ~/.gradle/jdks, SDKMAN, /usr/lib/jvm, macOS's
+JavaVirtualMachines, Program Files on Windows), then `JAVA_HOME`. A version runs on the JDK
+it requires, or else the nearest newer one; Java 8 has no substitute, since old Forge breaks
+on 9+.
 """
 import argparse
 import concurrent.futures
@@ -28,6 +32,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import signal
 import subprocess
@@ -44,8 +49,8 @@ LOADER_IDS = {"fabric": "fabric-loader", "forge": "forge", "neoforge": "neoforge
 IS_WINDOWS = os.name == "nt"
 OS_NAME = "windows" if IS_WINDOWS else "osx" if sys.platform == "darwin" else "linux"
 IS_ARM = platform.machine().lower() in ("arm64", "aarch64")
-# Gradle (for the fixture) and HeadlessMC run on the JDK the build uses.
-BUILD_JAVA = 25
+# The Gradle client (for the fixture) and HeadlessMC run on the newest JDK at least this new.
+TOOL_JAVA = 17
 
 
 def main():
@@ -65,7 +70,7 @@ def main():
     jar = args.jar or newest(glob.glob(os.path.join(ROOT, "build", "libs", "tailgate-*.jar")))
     if not jar:
         sys.exit("no merged jar; run ./gradlew mergeJar first or pass --jar")
-    javas = parse_javas(args.java)
+    javas = find_javas(args.java)
     work = os.path.abspath(args.work)
     mcdir = os.path.join(work, "mc")
 
@@ -74,7 +79,7 @@ def main():
     fixture_dir = os.path.join(ROOT, "core", "build", "selftest-fixture")
     make_dirs(work)
     fixture_log = open_log(os.path.join(work, "fixture.log"))
-    fixture = start_fixture(fixture_dir, java_home(BUILD_JAVA, javas, at_least=True), fixture_log)
+    fixture = start_fixture(fixture_dir, java_home(TOOL_JAVA, javas, at_least=True), fixture_log)
     try:
         address = wait_for_file(os.path.join(fixture_dir, "address.txt"), 300, fixture).strip()
         gamedir = prepare_gamedir(os.path.join(work, "run", args.node), jar)
@@ -115,7 +120,7 @@ def install(work, mcdir, mc, loader, loader_version, javas):
         print(f"Downloading HeadlessMC {HMC_VERSION}")
         if not fetch(HMC_URL, hmc):
             abort("couldn't download HeadlessMC")
-    hmc_java = java_for(BUILD_JAVA, javas, at_least=True)
+    hmc_java = java_for(TOOL_JAVA, javas, at_least=True)
     write_text(os.path.join(work, "HeadlessMC", "config.properties"), "\n".join([
         f"hmc.java.versions={';'.join(sorted(set(java_exe(h) for h in javas.values())) or [hmc_java])}",
         f"hmc.mcdir={fwd(mcdir)}",
@@ -172,21 +177,82 @@ def java_for(major, javas, at_least=False):
 
 
 def java_home(major, javas, at_least=False):
-    candidates = dict(javas)
+    """The JDK for Java [major]: the newest installed one when [at_least], else the exact version
+    or the nearest newer one. Java 8 must match exactly."""
+    newer = sorted(n for n in javas if n >= major)
+    if at_least and newer:
+        return javas[newer[-1]]
+    if major in javas:
+        return javas[major]
+    if major == 8 or not newer:
+        abort(f"no JDK for Java {major}; pass --java {major}=<home>")
+    print(f"No JDK for Java {major}; using Java {newer[0]}")
+    return javas[newer[0]]
+
+
+def find_javas(specs):
+    """Maps each major version to a JDK home, from --java, setup-java's variables, standard
+    install locations and JAVA_HOME, in that order."""
+    javas = parse_javas(specs)
     for key, value in os.environ.items():
         for suffix in ("_X64", "_AARCH64", "_ARM64"):
             if key.startswith("JAVA_HOME_") and key.endswith(suffix):
                 n = key[len("JAVA_HOME_"):-len(suffix)].split("_")[0]
                 if n.isdigit():
-                    candidates.setdefault(int(n), value)
-    home = candidates.get(major)
-    if home is None and at_least:
-        newer = [n for n in candidates if n >= major]
-        home = candidates[max(newer)] if newer else None
-    home = home or os.environ.get("JAVA_HOME")
-    if not home:
-        sys.exit(f"no JDK for Java {major}; pass --java {major}=<home>")
-    return home
+                    javas.setdefault(int(n), value)
+    found = {}
+    for home in installed_jdks():
+        version = jdk_version(home)
+        if version and (version[0] not in found or version > found[version[0]][0]):
+            found[version[0]] = (version, home)
+    for major, (_, home) in found.items():
+        javas.setdefault(major, home)
+    home = os.environ.get("JAVA_HOME")
+    version = jdk_version(home) if home else None
+    if version:
+        javas.setdefault(version[0], home)
+    return javas
+
+
+def installed_jdks():
+    """JDK homes in the usual install locations; missing locations are skipped."""
+    home = os.path.expanduser("~")
+    roots = [os.path.join(home, ".jdks"), os.path.join(home, ".gradle", "jdks"),
+             os.path.join(home, ".sdkman", "candidates", "java"), "/usr/lib/jvm",
+             "/Library/Java/JavaVirtualMachines"]
+    if IS_WINDOWS:
+        program_files = os.environ.get("ProgramFiles", "C:/Program Files")
+        roots += [os.path.join(program_files, vendor)
+                  for vendor in ("Java", "Eclipse Adoptium", "Microsoft", "Zulu", "Amazon Corretto")]
+    for root in roots:
+        try:
+            children = sorted(os.listdir(root))
+        except OSError:
+            continue
+        for child in children:
+            # macOS bundles keep the JDK in Contents/Home.
+            for path in (os.path.join(root, child), os.path.join(root, child, "Contents", "Home")):
+                if jdk_version(path):
+                    yield path
+
+
+def jdk_version(home):
+    """The version of the JDK at [home] as a tuple with the major version first, e.g. (8, 0, 504)
+    for "1.8.0_504"; None when [home] isn't a JDK."""
+    if not os.path.isfile(java_exe(home)):
+        return None
+    try:
+        with open(os.path.join(home, "release"), encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        if line.startswith("JAVA_VERSION="):
+            parts = tuple(int(n) for n in re.findall(r"\d+", line))
+            if parts[:1] == (1,):
+                parts = parts[1:]
+            return parts or None
+    return None
 
 
 def java_exe(home):
@@ -196,11 +262,11 @@ def java_exe(home):
 # --- fixture ------------------------------------------------------------------------------------
 
 def start_fixture(fixture_dir, jdk, log):
-    """Starts `:core:selfTestFixture` with [jdk] as Gradle's JAVA_HOME; output goes to [log]."""
+    """Starts `:core:selfTestFixture` with [jdk] as the Gradle client's JAVA_HOME; output goes to
+    [log]. The daemon picks its own JDK from gradle/gradle-daemon-jvm.properties."""
     remove_tree(fixture_dir)
     gradlew = os.path.join(ROOT, "gradlew.bat" if IS_WINDOWS else "gradlew")
-    # gradle.properties pins org.gradle.java.home to a developer's JDK; point it at this machine's.
-    command = [gradlew, "--quiet", f"-Dorg.gradle.java.home={fwd(jdk)}", ":core:selfTestFixture"]
+    command = [gradlew, "--quiet", ":core:selfTestFixture"]
     return spawn(command, ROOT, log, dict(os.environ, JAVA_HOME=jdk))
 
 
