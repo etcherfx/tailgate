@@ -71,7 +71,8 @@ abstract class VerifyJar : DefaultTask() {
         } else {
             val builds = index["builds"] as Map<*, *>
             val missing = mutableListOf<String>()
-            for (target in Targets.read(targetsFile.get().asFile)) {
+            val targets = Targets.read(targetsFile.get().asFile)
+            for (target in targets) {
                 val build = (builds[target.loader] as? Map<*, *>)?.get(target.mc) as? String
                 when {
                     build == null -> missing += target.node
@@ -85,8 +86,11 @@ abstract class VerifyJar : DefaultTask() {
                 }
             }
             if (missing.isNotEmpty()) {
-                val message = "${missing.size} targets have no UI build: ${missing.joinToString()}"
-                if (requireAllTargets.get()) problems += message else logger.warn("Tailgate: $message (partial build)")
+                if (requireAllTargets.get()) {
+                    problems += "${missing.size} targets have no UI build: ${missing.joinToString()}"
+                } else {
+                    logger.warn("Tailgate: partial build covers ${targets.size - missing.size} of ${targets.size} targets (-Ptailgate.nodes=all builds them all)")
+                }
             }
         }
 

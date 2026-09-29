@@ -2,7 +2,7 @@
 # Tailgate builds one UI node per (release, loader) pair listed here.
 #
 # Compiled on 2026-09-28 from official loader metadata; regenerate by hand when adding releases:
-#   Fabric:   https://meta.fabricmc.net/v2/versions/game (stable), .../loader (newest stable), .../yarn/<mc>
+#   Fabric:   https://meta.fabricmc.net/v2/versions/game (stable), .../loader (newest stable)
 #   Forge:    https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json
 #             (versions carry the Maven branch suffix where one exists, e.g. 10.13.4.1614-1.7.10)
 #             (recommended build, else latest)
@@ -10,7 +10,8 @@
 #             (newest release, else newest beta)
 #
 # Mappings are derived in build-logic: none for 26.1+ (unobfuscated), Mojang mappings for 1.14.4+,
-# otherwise the MCP (Forge) or Yarn (Fabric) entries below.
+# otherwise the MCP entries below (Forge only). Releases older than 1.14.4 with no MCP entry are
+# compiled against 1.14.4 through [compile-as].
 
 [fabric]
 loader = "0.19.5"
@@ -147,15 +148,7 @@ versions = [
 "1.20.3" = "20.3.8-beta"
 "1.20.2" = "20.2.93"
 
-[mappings.yarn]
-"1.14" = 21
-"1.14.1" = 10
-"1.14.2" = 7
-"1.14.3" = 13
-
 [mappings.mcp]
-"1.14.3" = "stable:56-1.14.3"
-"1.14.2" = "stable:53-1.14.2"
 "1.13.2" = "stable:47-1.13.2"
 "1.12.2" = "stable:39-1.12"
 "1.12.1" = "stable:39-1.12"
@@ -170,3 +163,18 @@ versions = [
 "1.8.8" = "stable:20-1.8.8"
 "1.8" = "stable:18-1.8"
 "1.7.10" = "stable:12-1.7.10"
+
+# Nodes compiled against a neighbouring release of the same loader. The jar still serves the
+# listed release: Fabric runs on intermediary names and Forge on SRG names, both of which stay
+# the same across these pairs for everything Tailgate touches (the runtime tests check it).
+[compile-as]
+# Mojang mappings start at 1.14.4; the earlier 1.14 releases share its screen code.
+"1.14-fabric" = "1.14.4-fabric"
+"1.14.1-fabric" = "1.14.4-fabric"
+"1.14.2-fabric" = "1.14.4-fabric"
+"1.14.3-fabric" = "1.14.4-fabric"
+"1.14.2-forge" = "1.14.4-forge"
+"1.14.3-forge" = "1.14.4-forge"
+# Forge 1.16.1 patches in a second Widget.getHeight() that Mojang's mappings can't tell apart
+# from vanilla's, so the remapper can't produce a Mojang-named Minecraft for it.
+"1.16.1-forge" = "1.16.2-forge"

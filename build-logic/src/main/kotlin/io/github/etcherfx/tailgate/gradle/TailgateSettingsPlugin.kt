@@ -21,7 +21,7 @@ class TailgateSettingsPlugin : Plugin<Settings> {
         settings.include("core", "stubs", "entry", "ui")
 
         settings.extensions.getByType(StonecutterSettingsExtension::class.java).create(":ui") {
-            for (target in selected) version(target.node, target.mc)
+            for (target in selected) version(target.node, target.buildMc)
             vcsVersion.set(Targets.ACTIVE_NODE)
         }
     }

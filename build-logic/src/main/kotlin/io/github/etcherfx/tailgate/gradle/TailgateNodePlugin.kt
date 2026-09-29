@@ -7,6 +7,8 @@ import org.gradle.api.artifacts.VersionCatalogsExtension
 import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.SourceDirectorySet
+import org.gradle.api.services.BuildService
+import org.gradle.api.services.BuildServiceParameters
 import org.gradle.api.tasks.Copy
 import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.OutputDirectory
@@ -39,7 +41,17 @@ class TailgateNodePlugin : Plugin<Project> {
 
         project.repositories.apply {
             mavenCentral()
-            for ((name, url) in REPOSITORIES) maven { this.name = name; setUrl(url) }
+            // Scope each loader repository to what it hosts: Gradle asks every repository for every
+            // artifact, so one flaky host would otherwise fail unrelated lookups (e.g. Minecraft's
+            // own artifacts, which Unimined provides).
+            for ((name, url, groups) in REPOSITORIES) maven {
+                this.name = name
+                setUrl(url)
+                content {
+                    excludeGroup("net.minecraft")
+                    if (groups != null) includeGroupByRegex(groups)
+                }
+            }
         }
 
         val unimined = project.extensions.getByType(UniminedExtension::class.java)
@@ -55,6 +67,9 @@ class TailgateNodePlugin : Plugin<Project> {
         }
         project.tasks.withType(KotlinCompile::class.java).configureEach {
             compilerOptions.jvmTarget.set(JvmTarget.JVM_1_8)
+            // Kotlin stamps the module name into every class; one name for all nodes lets the merge
+            // step recognise nodes that compile to the same bytes and ship them once.
+            compilerOptions.moduleName.set("tailgate-ui")
             compilerOptions.freeCompilerArgs.addAll("-Xno-call-assertions", "-Xno-param-assertions", "-Xno-receiver-assertions")
         }
 
@@ -78,6 +93,12 @@ class TailgateNodePlugin : Plugin<Project> {
             archiveVersion.set(target.node)
         }
 
+        // Each remap loads a whole Minecraft classpath; running dozens at once exhausts the heap.
+        val remapSlots = project.gradle.sharedServices.registerIfAbsent("tailgateRemapSlots", RemapSlots::class.java) {
+            maxParallelUsages.set(REMAP_SLOTS)
+        }
+        project.tasks.named("remapJar") { usesService(remapSlots) }
+
         project.tasks.register("collectNode", Copy::class.java) {
             group = "build"
             description = "Copies this node's remapped jar into the root build for merging."
@@ -88,7 +109,7 @@ class TailgateNodePlugin : Plugin<Project> {
     }
 
     private fun MinecraftConfig.configureMinecraft(target: Target) {
-        version(target.mc)
+        version(target.buildMc)
         mappings {
             val m = target.mappings
             when {
@@ -96,10 +117,6 @@ class TailgateNodePlugin : Plugin<Project> {
                 m == "mojmap" -> {
                     if (target.loader == "fabric") intermediary()
                     mojmap()
-                }
-                m.startsWith("yarn:") -> {
-                    intermediary()
-                    yarnv1(m.removePrefix("yarn:").toInt())
                 }
                 m.startsWith("mcp:") -> {
                     val (channel, version) = m.removePrefix("mcp:").split(':', limit = 2)
@@ -110,36 +127,39 @@ class TailgateNodePlugin : Plugin<Project> {
             }
         }
         when (target.loader) {
-            "fabric" -> fabric { loader(target.loaderVersion) }
+            "fabric" -> fabric { loader(target.buildLoaderVersion) }
             // useToolchains = false runs Forge's setup tools on the build JVM instead of asking for
             // a JDK matching each release (8, 16, 21…), which only CI has.
             "forge" -> minecraftForge {
-                loader(target.loaderVersion)
+                loader(target.buildLoaderVersion)
                 useToolchains = false
             }
             "neoforge" -> neoForge {
-                loader("net.neoforged:neoforge:${target.loaderVersion}:universal")
+                loader("net.neoforged:neoforge:${target.buildLoaderVersion}:universal")
                 useToolchains = false
             }
             else -> error("Unknown loader ${target.loader}")
         }
-        // Runtime testing happens in CI with mc-runtime-test, not Unimined's dev runs.
+        // Runtime testing uses scripts/runtime-test.py, not Unimined's dev runs.
         runs { off = true }
         defaultRemapJar = true
     }
 
     private companion object {
-        val FAMILIES = setOf("mojmap", "mcp", "yarn")
+        const val REMAP_SLOTS = 3
+        val FAMILIES = setOf("mojmap", "mcp")
 
+        /** Name, URL, and the group regex the repository is limited to (null: anything but Minecraft). */
         val REPOSITORIES = listOf(
-            "Fabric" to "https://maven.fabricmc.net/",
-            "Forge" to "https://maven.minecraftforge.net/",
-            "NeoForged" to "https://maven.neoforged.net/releases/",
-            "Sponge" to "https://repo.spongepowered.org/maven/",
-            "WagYourTail" to "https://maven.wagyourtail.xyz/releases/",
+            Triple("Fabric", "https://maven.fabricmc.net/", null),
+            Triple("Forge", "https://maven.minecraftforge.net/", null),
+            Triple("NeoForged", "https://maven.neoforged.net/releases/", "net\\.neoforged(\\..*)?"),
         )
     }
 }
+
+/** Limits how many nodes remap at once (see [TailgateNodePlugin]); holds no state. */
+abstract class RemapSlots : BuildService<BuildServiceParameters.None>
 
 /** Lists the node's compiled mixin classes in a mixin config so Unimined builds their refmap. */
 abstract class GenerateMixinConfig : DefaultTask() {
