@@ -22,6 +22,10 @@ public abstract class JoinMultiplayerScreenMixin extends Screen {
 
     @Inject(method = "init", at = @At("TAIL"))
     private void tailgate$afterInit(CallbackInfo ci) {
+        //? if >=1.17 {
         this.addRenderableWidget(MultiplayerHooks.button(this));
+        //?} else {
+        /*this.addButton(MultiplayerHooks.button(this));
+        *///?}
     }
 }

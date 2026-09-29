@@ -41,7 +41,7 @@ object SelfTest {
                 screen
             }
             val hasButton = onMain {
-                multiplayer.children().any { it is Button && it.message.string == AddServerForm.BUTTON }
+                multiplayer.children().any { it is Button && Compat.label(it) == AddServerForm.BUTTON }
             }
             if (hasButton) report.pass("button") else report.fail("button", "no Tailgate button on the Multiplayer screen")
 
@@ -88,7 +88,7 @@ object SelfTest {
 
     private fun minecraft(): Minecraft? = Minecraft.getInstance()
 
-    private fun currentScreen(): Screen? = Minecraft.getInstance().gui.screen()
+    private fun currentScreen(): Screen? = Compat.currentScreen()
 
     private fun <T> onMain(block: () -> T): T {
         val result = CompletableFuture<T>()
