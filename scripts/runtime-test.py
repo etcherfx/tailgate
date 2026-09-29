@@ -33,6 +33,7 @@ import sys
 import time
 import urllib.request
 import zipfile
+from typing import NoReturn
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HMC_VERSION = "2.10.0"
@@ -60,15 +61,15 @@ def main():
     jar = args.jar or newest(glob.glob(os.path.join(ROOT, "build", "libs", "tailgate-*.jar")))
     if not jar:
         sys.exit("no merged jar; run ./gradlew mergeJar first or pass --jar")
-    javas = {int(k): v for k, v in (j.split("=", 1) for j in args.java)}
+    javas = parse_javas(args.java)
     work = os.path.abspath(args.work)
     mcdir = os.path.join(work, "mc")
 
     version = install(work, mcdir, mc, loader, args.loader_version, javas)
     java = java_for(required_java(mcdir, version), javas)
     fixture_dir = os.path.join(ROOT, "core", "build", "selftest-fixture")
-    os.makedirs(work, exist_ok=True)
-    fixture_log = open(os.path.join(work, "fixture.log"), "w", encoding="utf-8")
+    make_dirs(work)
+    fixture_log = open_log(os.path.join(work, "fixture.log"))
     fixture = start_fixture(fixture_dir, java_home(17, javas, at_least=True), fixture_log)
     try:
         address = wait_for_file(os.path.join(fixture_dir, "address.txt"), 300, fixture).strip()
@@ -83,14 +84,13 @@ def main():
         fixture_log.close()
 
     report = os.path.join(gamedir, "tailgate-selftest.txt")
-    text = open(report, encoding="utf-8").read() if os.path.exists(report) else ""
+    text = read_text(report) if os.path.exists(report) else ""
     print(f"== {args.node} ({version}), game exit {code}")
     print(text or "no tailgate-selftest.txt written")
     if "result=pass" in text:
         return 0
     print(f"-- last lines of {log}")
-    with open(log, encoding="utf-8", errors="replace") as f:
-        print("".join(f.readlines()[-60:]))
+    print("\n".join(read_text(log).splitlines()[-60:]))
     return 1
 
 
@@ -107,28 +107,31 @@ def install(work, mcdir, mc, loader, loader_version, javas):
         return existing
     hmc = os.path.join(work, f"headlessmc-launcher-{HMC_VERSION}.jar")
     if not os.path.exists(hmc):
-        os.makedirs(work, exist_ok=True)
+        make_dirs(work)
         print(f"Downloading HeadlessMC {HMC_VERSION}")
-        urllib.request.urlretrieve(HMC_URL, hmc + ".part")
-        os.replace(hmc + ".part", hmc)
+        try:
+            urllib.request.urlretrieve(HMC_URL, hmc + ".part")
+            os.replace(hmc + ".part", hmc)
+        except OSError as e:
+            abort(f"couldn't download HeadlessMC: {e}")
     hmc_java = java_for(17, javas, at_least=True)
-    config = os.path.join(work, "HeadlessMC", "config.properties")
-    os.makedirs(os.path.dirname(config), exist_ok=True)
-    with open(config, "w", encoding="utf-8") as f:
-        f.write("\n".join([
-            f"hmc.java.versions={';'.join(sorted(set(java_exe(h) for h in javas.values())) or [hmc_java])}",
-            f"hmc.mcdir={fwd(mcdir)}",
-            f"hmc.gamedir={fwd(os.path.join(work, 'run', 'hmc'))}",
-            "hmc.offline=true",
-            "hmc.assets.dummy=true",
-            "hmc.exit.on.failed.command=true",
-            "hmc.rethrow.launch.exceptions=true",
-        ]) + "\n")
+    write_text(os.path.join(work, "HeadlessMC", "config.properties"), "\n".join([
+        f"hmc.java.versions={';'.join(sorted(set(java_exe(h) for h in javas.values())) or [hmc_java])}",
+        f"hmc.mcdir={fwd(mcdir)}",
+        f"hmc.gamedir={fwd(os.path.join(work, 'run', 'hmc'))}",
+        "hmc.offline=true",
+        "hmc.assets.dummy=true",
+        "hmc.exit.on.failed.command=true",
+        "hmc.rethrow.launch.exceptions=true",
+    ]) + "\n")
     command = [loader, mc]
     if loader_version:
         command += ["--uid", loader_version]
     print(f"Installing {' '.join(command)} with HeadlessMC")
-    subprocess.check_call([hmc_java, "-jar", hmc, "--command", *command], cwd=work)
+    try:
+        subprocess.check_call([hmc_java, "-jar", hmc, "--command", *command], cwd=work)
+    except (OSError, subprocess.CalledProcessError) as e:
+        abort(f"HeadlessMC couldn't install {' '.join(command)}: {e}")
     installed = find_version(mcdir, mc, loader, loader_version)
     if not installed:
         sys.exit(f"HeadlessMC didn't install a {loader} version for {mc}")
@@ -141,7 +144,7 @@ def find_version(mcdir, mc, loader, loader_version):
         vid = os.path.basename(os.path.dirname(path))
         if not os.path.basename(path) == vid + ".json":
             continue
-        data = json.load(open(path, encoding="utf-8"))
+        data = read_json(path)
         lower = vid.lower()
         if data.get("inheritsFrom") != mc or LOADER_IDS[loader] not in lower:
             continue
@@ -193,9 +196,11 @@ def java_exe(home):
 
 def start_fixture(fixture_dir, jdk, log):
     """Starts `:core:selfTestFixture` with [jdk] as Gradle's JAVA_HOME; output goes to [log]."""
-    shutil.rmtree(fixture_dir, ignore_errors=True)
+    remove_tree(fixture_dir)
     gradlew = os.path.join(ROOT, "gradlew.bat" if IS_WINDOWS else "gradlew")
-    return spawn([gradlew, "--quiet", ":core:selfTestFixture"], ROOT, log, dict(os.environ, JAVA_HOME=jdk))
+    # gradle.properties pins org.gradle.java.home to a developer's JDK; point it at this machine's.
+    command = [gradlew, "--quiet", f"-Dorg.gradle.java.home={fwd(jdk)}", ":core:selfTestFixture"]
+    return spawn(command, ROOT, log, dict(os.environ, JAVA_HOME=jdk))
 
 
 def wait_for_file(path, seconds, process):
@@ -206,26 +211,29 @@ def wait_for_file(path, seconds, process):
         if time.time() > deadline:
             sys.exit(f"the self-test fixture didn't start within {seconds}s")
         time.sleep(0.5)
-    time.sleep(0.2)
-    return open(path, encoding="utf-8").read()
+    time.sleep(0.2)  # let the fixture finish writing the file
+    return read_text(path)
 
 
 # --- launching ----------------------------------------------------------------------------------
 
 def prepare_gamedir(gamedir, jar):
-    shutil.rmtree(gamedir, ignore_errors=True)
-    os.makedirs(os.path.join(gamedir, "mods"))
-    shutil.copy(jar, os.path.join(gamedir, "mods"))
+    remove_tree(gamedir)
+    mods = os.path.join(gamedir, "mods")
+    make_dirs(mods)
+    try:
+        shutil.copy(jar, mods)
+    except OSError as e:
+        abort(f"can't copy {jar} into {mods}: {e}")
     # Skip the first-launch accessibility screen; keep ticking while unfocused.
-    with open(os.path.join(gamedir, "options.txt"), "w", encoding="utf-8") as f:
-        f.write("onboardAccessibility:false\npauseOnLostFocus:false\n")
+    write_text(os.path.join(gamedir, "options.txt"), "onboardAccessibility:false\npauseOnLostFocus:false\n")
     return gamedir
 
 
 def chain(mcdir, version):
     out = []
     while version:
-        data = json.load(open(os.path.join(mcdir, "versions", version, version + ".json"), encoding="utf-8"))
+        data = read_json(os.path.join(mcdir, "versions", version, version + ".json"))
         out.append(data)
         version = data.get("inheritsFrom")
     return out
@@ -269,7 +277,7 @@ def launch(mcdir, version, gamedir, java, extra_jvm, log, timeout):
     base = versions[-1]
     libdir = os.path.join(mcdir, "libraries")
     natives = os.path.join(gamedir, "natives")
-    os.makedirs(natives, exist_ok=True)
+    make_dirs(natives)
     cp, seen = [], set()
     for data in versions:
         for lib in data.get("libraries", []):
@@ -309,10 +317,8 @@ def launch(mcdir, version, gamedir, java, extra_jvm, log, timeout):
 
     assets = os.path.join(mcdir, "assets")
     index = os.path.join(assets, "indexes", base.get("assets", "legacy") + ".json")
-    os.makedirs(os.path.dirname(index), exist_ok=True)
     if not os.path.exists(index):
-        with open(index, "w", encoding="utf-8") as f:
-            f.write('{"objects":{}}')
+        write_text(index, '{"objects":{}}')
     subs = {
         "library_directory": libdir, "classpath_separator": os.pathsep, "version_name": version,
         "natives_directory": natives, "launcher_name": "tailgate-runtime-test", "launcher_version": "1",
@@ -345,7 +351,8 @@ def launch(mcdir, version, gamedir, java, extra_jvm, log, timeout):
     main_class = next(d["mainClass"] for d in versions if "mainClass" in d)
     command = [java, "-Xmx2G", *extra_jvm, *jvm, main_class, *game]
     print(f"Launching {version} with {java} (timeout {timeout}s)")
-    with open(log, "w", encoding="utf-8") as out:
+    out = open_log(log)
+    try:
         process = spawn(command, gamedir, out)
         try:
             return process.wait(timeout)
@@ -353,6 +360,8 @@ def launch(mcdir, version, gamedir, java, extra_jvm, log, timeout):
             print(f"timed out after {timeout}s; killing the game")
             kill_tree(process)
             return None
+    finally:
+        out.close()
 
 
 def maven_path(libdir, group, artifact, ver, classifier):
@@ -361,25 +370,32 @@ def maven_path(libdir, group, artifact, ver, classifier):
 
 
 def extract_natives(jar, target, excludes):
-    with zipfile.ZipFile(jar) as z:
-        for name in z.namelist():
-            if name.endswith("/") or any(name.startswith(e) for e in excludes + ["META-INF/"]):
-                continue
-            dest = os.path.join(target, name)
-            if not os.path.exists(dest):
-                os.makedirs(os.path.dirname(dest), exist_ok=True)
-                with open(dest, "wb") as f:
-                    f.write(z.read(name))
+    try:
+        with zipfile.ZipFile(jar) as z:
+            for name in z.namelist():
+                if name.endswith("/") or any(name.startswith(e) for e in excludes + ["META-INF/"]):
+                    continue
+                dest = os.path.join(target, name)
+                if not os.path.exists(dest):
+                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    with open(dest, "wb") as f:
+                        f.write(z.read(name))
+    except (OSError, zipfile.BadZipFile) as e:
+        abort(f"can't extract natives from {jar}: {e}")
 
 
 # --- processes ----------------------------------------------------------------------------------
 
 def spawn(command, cwd, stdout, env=None):
-    if IS_WINDOWS:
+    """Starts [command] in its own process group, so kill_tree can take its children with it."""
+    try:
+        if sys.platform == "win32":
+            return subprocess.Popen(command, cwd=cwd, stdout=stdout, stderr=subprocess.STDOUT, env=env,
+                                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
         return subprocess.Popen(command, cwd=cwd, stdout=stdout, stderr=subprocess.STDOUT, env=env,
-                                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
-    return subprocess.Popen(command, cwd=cwd, stdout=stdout, stderr=subprocess.STDOUT, env=env,
-                            start_new_session=True)
+                                start_new_session=True)
+    except OSError as e:
+        abort(f"can't start {command[0]}: {e}")
 
 
 def kill_tree(process):
@@ -400,9 +416,69 @@ def fwd(path):
     return path.replace("\\", "/")
 
 
-if __name__ == "__main__":
-    # Any file or process failure aborts the run; report it as a failed test, not a traceback.
+# --- files --------------------------------------------------------------------------------------
+# File operations go through these, so a failure aborts the run naming the path.
+
+def abort(message) -> NoReturn:
+    sys.exit(f"runtime test aborted: {message}")
+
+
+def parse_javas(specs):
+    javas = {}
+    for spec in specs:
+        major, _, home = spec.partition("=")
+        if not major.isdigit() or not home:
+            abort(f"--java takes N=<JDK home>, got {spec}")
+        javas[int(major)] = home
+    return javas
+
+
+def read_text(path):
     try:
-        sys.exit(main())
-    except (OSError, subprocess.CalledProcessError) as e:
-        sys.exit(f"runtime test aborted: {e}")
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError as e:
+        abort(f"can't read {path}: {e}")
+
+
+def read_json(path):
+    try:
+        return json.loads(read_text(path))
+    except ValueError as e:
+        abort(f"{path} isn't valid JSON: {e}")
+
+
+def write_text(path, text):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+    except OSError as e:
+        abort(f"can't write {path}: {e}")
+
+
+def open_log(path):
+    try:
+        return open(path, "w", encoding="utf-8")
+    except OSError as e:
+        abort(f"can't write {path}: {e}")
+
+
+def make_dirs(path):
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError as e:
+        abort(f"can't create {path}: {e}")
+
+
+def remove_tree(path):
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        abort(f"can't delete {path}: {e}")
+
+
+if __name__ == "__main__":
+    sys.exit(main())
