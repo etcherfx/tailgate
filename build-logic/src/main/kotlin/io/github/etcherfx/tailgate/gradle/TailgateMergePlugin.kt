@@ -7,7 +7,8 @@ import org.gradle.api.tasks.bundling.Jar
 
 /**
  * Root-project tasks: `mergeJar` builds `tailgate-<version>.jar` from core, entry and every
- * collected node jar; `verifyJar` checks it. Both run as part of `build`.
+ * collected node jar; `verifyJar` checks it. Both run as part of `build`. `ciMatrix` prints the
+ * CI job matrices.
  *
  * With `-Ptailgate.prebuiltNodes=true` the merge uses node jars already in `build/nodes`
  * (CI builds nodes in parallel jobs and merges them in one final job).
@@ -51,6 +52,11 @@ class TailgateMergePlugin : Plugin<Project> {
             targetsFile.set(project.layout.projectDirectory.file("targets.toml"))
             requireAllTargets.set(prebuilt || nodeSpec == "all")
             report.set(project.layout.buildDirectory.file("reports/verifyJar.txt"))
+        }
+        project.tasks.register("ciMatrix", CiMatrix::class.java) {
+            group = "verification"
+            description = "Prints the CI build and runtime-test matrices as GitHub step outputs."
+            targetsFile.set(project.layout.projectDirectory.file("targets.toml"))
         }
         project.tasks.named("assemble") { dependsOn(merge) }
         project.tasks.named("check") { dependsOn(verify) }

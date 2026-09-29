@@ -100,14 +100,13 @@ object Targets {
     }
 
     /**
-     * Resolves `-Ptailgate.nodes`: `all`, `none`, or a comma-separated node list.
+     * Resolves `-Ptailgate.nodes`: `all` or a comma-separated node list (`none` never gets here).
      * The active node is always included so Stonecutter can resolve it.
      */
     fun select(all: List<Target>, spec: String?): List<Target> {
         val wanted = when (spec?.trim()) {
             null, "" -> setOf(ACTIVE_NODE)
             "all" -> return all
-            "none" -> setOf(ACTIVE_NODE)
             else -> spec.split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet() + ACTIVE_NODE
         }
         val unknown = wanted - all.map { it.node }.toSet()

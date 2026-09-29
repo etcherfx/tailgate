@@ -9,16 +9,20 @@ import org.gradle.api.initialization.Settings
  *
  * `-Ptailgate.nodes=all` configures every target in `targets.toml`; a comma-separated list
  * configures just those nodes. By default only the active node is configured, because each
- * node downloads and remaps its own Minecraft and loader.
+ * node downloads and remaps its own Minecraft and loader. `none` configures no UI nodes at all,
+ * for tasks that don't build the mod (`ciMatrix`, `runtimeTest`).
  */
 class TailgateSettingsPlugin : Plugin<Settings> {
     override fun apply(settings: Settings) {
+        val spec = settings.providers.gradleProperty("tailgate.nodes").orNull
+        settings.include("core", "stubs", "entry")
+        if (spec?.trim() == "none") return
+
         settings.pluginManager.apply("dev.kikugie.stonecutter")
-
         val all = Targets.read(settings.rootDir.resolve("targets.toml"))
-        val selected = Targets.select(all, settings.providers.gradleProperty("tailgate.nodes").orNull)
+        val selected = Targets.select(all, spec)
 
-        settings.include("core", "stubs", "entry", "ui")
+        settings.include("ui")
 
         settings.extensions.getByType(StonecutterSettingsExtension::class.java).create(":ui") {
             for (target in selected) version(target.node, target.buildMc)

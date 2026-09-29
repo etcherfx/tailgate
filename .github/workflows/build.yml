@@ -27,12 +27,20 @@ jobs:
       runtime: ${{ steps.matrix.outputs.runtime }}
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 25
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: true
       - id: matrix
         # Tags and manual runs with all-runtime launch every node; other runs launch the smoke set.
         env:
           ALL_RUNTIME: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.all-runtime }}
-        run: uv run scripts/ci-matrix.py $([ "$ALL_RUNTIME" = true ] && echo --all-runtime) >> "$GITHUB_OUTPUT"
+        run: >
+          ./gradlew ciMatrix $([ "$ALL_RUNTIME" = true ] && echo --all-runtime)
+          --output "$GITHUB_OUTPUT" -q --console=plain -Ptailgate.nodes=none
 
   core:
     name: core tests (Java ${{ matrix.java }})
