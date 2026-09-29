@@ -92,15 +92,15 @@ How it fits together:
 
 ### Runtime test
 
-`scripts/runtime-test.py` launches a real game with the merged jar and runs Tailgate's in-game self-test. The self-test opens Multiplayer, uses the Tailgate button, tests against a local TLS server, and adds an entry. It needs [uv](https://docs.astral.sh/uv/) and a JDK for that release's Java version:
+The `runtimeTest` task launches a real game with the merged jar and runs Tailgate's in-game self-test. The self-test opens Multiplayer, uses the Tailgate button, tests against a local TLS server, and adds an entry. First build a jar that includes the release, then:
 
 ```sh
-uv run scripts/runtime-test.py 1.20.1-forge
+./gradlew runtimeTest --node 1.20.1-forge
 ```
 
-The script finds each release's JDK in the standard install locations, falling back to the nearest newer JDK. Pass `--java N=<home>` to choose one yourself. Releases that need Java 8 won't run on anything newer, so the script stops if it can't find a Java 8 JDK.
+It needs only a JDK. The game runs on JDK 8, 17, 21 or 25, whichever is the oldest its release supports (1.17.x runs on Java 17). Gradle finds those JDKs in the usual install locations or downloads them. Point it at other locations with `-Porg.gradle.java.installations.paths=<jdk>,<jdk>`. Downloads and game directories go to `build/runtime-test`; pass `-Ptailgate.runtimeDir=<dir>` to use another directory.
 
-It installs Minecraft with [HeadlessMC](https://github.com/headlesshq/headlessmc), exits 0 on pass, and never waits for input. A window opens while the game runs; on Linux, wrap the command in `xvfb-run`. CI runs it for a smoke set of releases on every push, and for every release on tags.
+It installs Minecraft with [HeadlessMC](https://github.com/headlesshq/headlessmc), fails the task unless the self-test passes, and never waits for input. A window opens while the game runs; on Linux, wrap the command in `xvfb-run`. CI runs it for a smoke set of releases on every push, and for every release on tags.
 
 ## License
 
