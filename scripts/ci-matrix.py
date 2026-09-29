@@ -3,7 +3,7 @@
 # ///
 """Prints the CI matrices as GitHub step outputs, from targets.toml.
 
-    python3 scripts/ci-matrix.py [--all-runtime] >> "$GITHUB_OUTPUT"
+    uv run scripts/ci-matrix.py [--all-runtime] >> "$GITHUB_OUTPUT"
 
 build:   the UI nodes split into groups, one parallel build job each.
 runtime: the nodes to launch with scripts/runtime-test.py. By default a smoke set that covers

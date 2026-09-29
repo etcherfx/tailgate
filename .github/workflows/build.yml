@@ -27,11 +27,12 @@ jobs:
       runtime: ${{ steps.matrix.outputs.runtime }}
     steps:
       - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
       - id: matrix
         # Tags and manual runs with all-runtime launch every node; other runs launch the smoke set.
         env:
           ALL_RUNTIME: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.all-runtime }}
-        run: python3 scripts/ci-matrix.py $([ "$ALL_RUNTIME" = true ] && echo --all-runtime) >> "$GITHUB_OUTPUT"
+        run: uv run scripts/ci-matrix.py $([ "$ALL_RUNTIME" = true ] && echo --all-runtime) >> "$GITHUB_OUTPUT"
 
   core:
     name: core tests (Java ${{ matrix.java }})
