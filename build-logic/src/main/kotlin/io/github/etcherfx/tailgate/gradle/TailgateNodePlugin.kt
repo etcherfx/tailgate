@@ -6,6 +6,7 @@ import org.gradle.api.Project
 import org.gradle.api.artifacts.VersionCatalogsExtension
 import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.SourceDirectorySet
 import org.gradle.api.tasks.Copy
 import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.OutputDirectory
@@ -48,13 +49,25 @@ class TailgateNodePlugin : Plugin<Project> {
         project.dependencies.add("compileOnly", project.project(":core"))
         project.dependencies.add("compileOnly", libs.findLibrary("kotlin-stdlib").get())
 
-        project.tasks.withType(JavaCompile::class.java).configureEach { options.release.set(8) }
+        project.tasks.withType(JavaCompile::class.java).configureEach {
+            options.release.set(8)
+            options.compilerArgs.add("-Xlint:-options")
+        }
         project.tasks.withType(KotlinCompile::class.java).configureEach {
             compilerOptions.jvmTarget.set(JvmTarget.JVM_1_8)
             compilerOptions.freeCompilerArgs.addAll("-Xno-call-assertions", "-Xno-param-assertions", "-Xno-receiver-assertions")
         }
 
         val sourceSets = project.extensions.getByType(SourceSetContainer::class.java)
+        // UI sources live in one directory per mapping family; compile only this node's family.
+        // Mixins exist only for Fabric; Forge and NeoForge hook screens through events.
+        val main = sourceSets.getByName("main")
+        val kotlinSources = main.extensions.getByName("kotlin") as SourceDirectorySet
+        for (family in FAMILIES - target.family) {
+            main.java.exclude("$family/**")
+            kotlinSources.exclude("$family/**")
+        }
+        if (target.loader != "fabric") main.java.exclude("**/*Mixin.java")
         val mixinConfig = project.tasks.register("generateMixinConfig", GenerateMixinConfig::class.java) {
             classes.from(sourceSets.getByName("main").output.classesDirs)
             outputDir.set(project.layout.buildDirectory.dir("generated/tailgate-mixins"))
@@ -98,14 +111,26 @@ class TailgateNodePlugin : Plugin<Project> {
         }
         when (target.loader) {
             "fabric" -> fabric { loader(target.loaderVersion) }
-            "forge" -> minecraftForge { loader(target.loaderVersion) }
-            "neoforge" -> neoForge { loader(target.loaderVersion) }
+            // useToolchains = false runs Forge's setup tools on the build JVM instead of asking for
+            // a JDK matching each release (8, 16, 21…), which only CI has.
+            "forge" -> minecraftForge {
+                loader(target.loaderVersion)
+                useToolchains = false
+            }
+            "neoforge" -> neoForge {
+                loader("net.neoforged:neoforge:${target.loaderVersion}:universal")
+                useToolchains = false
+            }
             else -> error("Unknown loader ${target.loader}")
         }
+        // Runtime testing happens in CI with mc-runtime-test, not Unimined's dev runs.
+        runs { off = true }
         defaultRemapJar = true
     }
 
     private companion object {
+        val FAMILIES = setOf("mojmap", "mcp", "yarn")
+
         val REPOSITORIES = listOf(
             "Fabric" to "https://maven.fabricmc.net/",
             "Forge" to "https://maven.minecraftforge.net/",

@@ -14,6 +14,13 @@ data class Target(
 ) : Serializable {
     val node: String get() = "$mc-$loader"
 
+    /** Which UI source directory this node compiles: `mojmap`, `mcp` or `yarn`. */
+    val family: String
+        get() = when {
+            mappings == "none" || mappings == "mojmap" -> "mojmap"
+            else -> mappings.substringBefore(':')
+        }
+
     /** Package segment the merge step relocates this node's classes into. */
     val packageId: String get() = nodePackageId(node)
 

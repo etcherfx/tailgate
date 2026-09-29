@@ -4,6 +4,7 @@
 # Compiled on 2026-09-28 from official loader metadata; regenerate by hand when adding releases:
 #   Fabric:   https://meta.fabricmc.net/v2/versions/game (stable), .../loader (newest stable), .../yarn/<mc>
 #   Forge:    https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json
+#             (versions carry the Maven branch suffix where one exists, e.g. 10.13.4.1614-1.7.10)
 #             (recommended build, else latest)
 #   NeoForge: https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge
 #             (newest release, else newest beta)
@@ -114,13 +115,13 @@ versions = [
 "1.11.2" = "13.20.1.2588"
 "1.11" = "13.19.1.2189"
 "1.10.2" = "12.18.3.2511"
-"1.10" = "12.18.0.2000"
-"1.9.4" = "12.17.0.2317"
+"1.10" = "12.18.0.2000-1.10.0"
+"1.9.4" = "12.17.0.2317-1.9.4"
 "1.9" = "12.16.1.1887"
-"1.8.9" = "11.15.1.2318"
+"1.8.9" = "11.15.1.2318-1.8.9"
 "1.8.8" = "11.15.0.1655"
 "1.8" = "11.14.4.1563"
-"1.7.10" = "10.13.4.1614"
+"1.7.10" = "10.13.4.1614-1.7.10"
 
 [neoforge]
 "26.3" = "26.3.0.33-beta"

@@ -11,6 +11,7 @@ dependencies {
     implementation(libs.asm.commons)
     implementation(libs.asm.tree)
     implementation(libs.tomlj)
+    implementation(libs.kotlinx.serialization.json)
 }
 
 gradlePlugin {
