@@ -32,16 +32,17 @@ data class Target(
     /** Package segment the merge step relocates this node's classes into. */
     val packageId: String get() = nodePackageId(node)
 
+    /** The Java version Mojang lists for [mc] itself. */
     val java: Int
         get() = when {
-            buildAtLeast("26.1") -> 25
-            buildAtLeast("1.20.5") -> 21
-            buildAtLeast("1.18") -> 17
-            buildAtLeast("1.17") -> 16
+            atLeast("26.1") -> 25
+            atLeast("1.20.5") -> 21
+            atLeast("1.18") -> 17
+            atLeast("1.17") -> 16
             else -> 8
         }
 
-    fun buildAtLeast(other: String): Boolean = compareMc(buildMc, other) >= 0
+    fun atLeast(other: String): Boolean = compareMc(mc, other) >= 0
 }
 
 fun nodePackageId(node: String): String = "v" + node.replace('.', '_').replace('-', '_')

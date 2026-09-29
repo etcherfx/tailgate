@@ -35,10 +35,3 @@ tasks.test {
         javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(testJava.get()) }
     }
 }
-
-tasks.register<JavaExec>("selfTestFixture") {
-    description = "Serves the TLS fixture the in-game self-test connects to (runs until killed)."
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass = "io.github.etcherfx.tailgate.core.SelfTestFixture"
-    args(layout.buildDirectory.dir("selftest-fixture").get().asFile.absolutePath)
-}

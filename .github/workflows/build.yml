@@ -139,7 +139,7 @@ jobs:
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
-          # runtime-test.py picks each release's Java from the JAVA_HOME_<N>_X64 variables.
+          # runtimeTest runs each release on one of these, which Gradle finds through JAVA_HOME_<N>_X64.
           java-version: |
             8
             17
@@ -148,7 +148,6 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
         with:
           cache-read-only: true
-      - uses: astral-sh/setup-uv@v10
       - name: Install Xvfb
         # LWJGL 2 (Minecraft 1.12 and older) queries display modes through xrandr.
         run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb x11-xserver-utils
@@ -159,7 +158,10 @@ jobs:
       - name: Launch Minecraft with the self-test
         env:
           NODE: ${{ matrix.node }}
-        run: xvfb-run -a uv run scripts/runtime-test.py "$NODE" --timeout 900
+        run: >
+          xvfb-run -a ./gradlew runtimeTest --node "$NODE" --timeout 900 --console=plain -Ptailgate.nodes=none
+          -Porg.gradle.java.installations.fromEnv=JAVA_HOME_8_X64,JAVA_HOME_17_X64,JAVA_HOME_21_X64,JAVA_HOME_25_X64
+          -Porg.gradle.java.installations.auto-download=false
       - if: always()
         uses: actions/upload-artifact@v7
         with:

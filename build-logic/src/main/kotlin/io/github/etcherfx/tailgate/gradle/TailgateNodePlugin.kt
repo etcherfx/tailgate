@@ -140,7 +140,7 @@ class TailgateNodePlugin : Plugin<Project> {
             }
             else -> error("Unknown loader ${target.loader}")
         }
-        // Runtime testing uses scripts/runtime-test.py, not Unimined's dev runs.
+        // Runtime testing uses the root runtimeTest task, not Unimined's dev runs.
         runs { off = true }
         defaultRemapJar = true
     }
