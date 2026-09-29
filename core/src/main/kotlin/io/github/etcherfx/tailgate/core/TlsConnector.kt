@@ -1,6 +1,9 @@
 package io.github.etcherfx.tailgate.core
 
+import java.io.IOException
+import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.UnknownHostException
 import java.net.Socket
 import java.security.KeyStore
 import java.security.cert.CertificateFactory
@@ -21,10 +24,8 @@ import javax.net.ssl.X509TrustManager
 class TlsConnector(private val factory: SSLSocketFactory = defaultContext.socketFactory) {
     @Throws(java.io.IOException::class)
     fun connect(address: FunnelAddress): SSLSocket {
-        val raw = Socket()
+        val raw = connectTcp(address)
         try {
-            raw.tcpNoDelay = true
-            raw.connect(InetSocketAddress(address.host, address.port), TIMEOUT_MS)
             val socket = factory.createSocket(raw, address.host, address.port, true) as SSLSocket
             val params = socket.sslParameters
             params.endpointIdentificationAlgorithm = "HTTPS"
@@ -42,6 +43,29 @@ class TlsConnector(private val factory: SSLSocketFactory = defaultContext.socket
             }
             throw e
         }
+    }
+
+    /**
+     * Tries each of the host's addresses in turn, so a dual-stack name still works when one
+     * family is unreachable (or the JVM prefers IPv6 and the host only listens on IPv4).
+     */
+    private fun connectTcp(address: FunnelAddress): Socket {
+        var failure: IOException? = null
+        for (ip in InetAddress.getAllByName(address.host)) {
+            val socket = Socket()
+            try {
+                socket.tcpNoDelay = true
+                socket.connect(InetSocketAddress(ip, address.port), TIMEOUT_MS)
+                return socket
+            } catch (e: IOException) {
+                try {
+                    socket.close()
+                } catch (ignored: IOException) {
+                }
+                if (failure == null) failure = e else failure.addSuppressed(e)
+            }
+        }
+        throw failure ?: UnknownHostException(address.host)
     }
 
     companion object {

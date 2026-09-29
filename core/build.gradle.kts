@@ -29,6 +29,8 @@ val testJava = providers.gradleProperty("tailgate.testJava").map { it.toInt() }
 
 tasks.test {
     useJUnitPlatform()
+    // Resolve localhost to ::1 first, so the TLS tests also cover falling back to the next address.
+    systemProperty("java.net.preferIPv6Addresses", "true")
     if (testJava.isPresent) {
         javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(testJava.get()) }
     }
