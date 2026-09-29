@@ -57,6 +57,9 @@ class AddServerForm(private val tailgate: Tailgate) {
         }
     }
 
+    /** [status] word-wrapped to [maxWidth], measured with the UI's font. */
+    fun statusLines(maxWidth: Int, width: (String) -> Int): List<String> = wrap(status, maxWidth, width)
+
     private fun parse(address: String): FunnelAddress? = try {
         FunnelAddress.parse(address)
     } catch (e: FunnelAddress.InvalidException) {
@@ -78,5 +81,25 @@ class AddServerForm(private val tailgate: Tailgate) {
         const val TEST = "Test"
         const val ADD = "Add"
         const val CANCEL = "Cancel"
+
+        /**
+         * Greedy word wrap; a single word wider than [maxWidth] gets a line of its own. Every UI
+         * build draws plain strings, since each Minecraft era splits styled text differently.
+         */
+        fun wrap(text: String, maxWidth: Int, width: (String) -> Int): List<String> {
+            val lines = mutableListOf<String>()
+            var line = ""
+            for (word in text.split(' ').filter { it.isNotEmpty() }) {
+                val candidate = if (line.isEmpty()) word else "$line $word"
+                if (line.isNotEmpty() && width(candidate) > maxWidth) {
+                    lines += line
+                    line = word
+                } else {
+                    line = candidate
+                }
+            }
+            if (line.isNotEmpty()) lines += line
+            return lines
+        }
     }
 }
