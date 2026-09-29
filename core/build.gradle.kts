@@ -21,6 +21,7 @@ kotlin {
 
 tasks.withType<JavaCompile>().configureEach {
     options.release = 8
+    options.compilerArgs.add("-Xlint:-options")
 }
 
 // CI runs the suite on each supported runtime with -Ptailgate.testJava=<8|17|21|25>.
