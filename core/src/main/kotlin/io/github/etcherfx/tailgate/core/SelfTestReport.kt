@@ -19,14 +19,14 @@ class SelfTestReport(private val tailgate: Tailgate) {
         tailgate.log.error("Self-test: $check failed: $reason")
     }
 
-    /** Writes `tailgate-selftest.txt` next to the server store's config directory. */
-    fun write(gameDir: File) {
+    /** Writes `tailgate-selftest.txt` into the game directory. */
+    fun write() {
         val passed = checks.isNotEmpty() && checks.values.all { it == "ok" }
         val text = buildString {
             for ((check, result) in checks) append(check).append('=').append(result).append('\n')
             append("result=").append(if (passed) "pass" else "fail").append('\n')
         }
-        File(gameDir, FILE_NAME).writeText(text)
+        File(tailgate.gameDir, FILE_NAME).writeText(text)
         tailgate.log.info("Self-test ${if (passed) "passed" else "failed"}; wrote $FILE_NAME")
     }
 
@@ -37,5 +37,9 @@ class SelfTestReport(private val tailgate: Tailgate) {
         /** The address to test against, or null when the self-test is off. */
         @JvmStatic
         val address: String? get() = System.getProperty(PROPERTY)?.takeIf { it.isNotBlank() }
+
+        /** `-Dtailgate.selftest.exit=true` quits the game after the report is written. */
+        @JvmStatic
+        val exitWhenDone: Boolean get() = System.getProperty("$PROPERTY.exit") == "true"
     }
 }

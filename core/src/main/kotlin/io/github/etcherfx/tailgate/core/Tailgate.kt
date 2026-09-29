@@ -12,6 +12,7 @@ class Tailgate(
     val store: ServerStore,
     val log: TailgateLog,
     private val connector: TlsConnector = TlsConnector(),
+    val gameDir: File = store.file.absoluteFile.parentFile,
 ) {
     private val lock = Any()
     private val servers = LinkedHashMap<String, SavedServer>()
@@ -138,7 +139,7 @@ class Tailgate(
         /** Starts Tailgate for the game in [gameDir]; later calls return the running instance. */
         @JvmStatic
         fun boot(gameDir: File, log: TailgateLog): Tailgate = synchronized(this) {
-            instance ?: Tailgate(ServerStore(File(gameDir, "config/tailgate/servers.json")), log).also {
+            instance ?: Tailgate(ServerStore(File(gameDir, "config/tailgate/servers.json")), log, gameDir = gameDir).also {
                 it.start()
                 instance = it
             }

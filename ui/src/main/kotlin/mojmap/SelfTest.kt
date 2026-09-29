@@ -27,9 +27,14 @@ object SelfTest {
     private fun run(address: String) {
         val tailgate = Tailgate.get()
         val report = SelfTestReport(tailgate)
-        val mc = Minecraft.getInstance()
         try {
-            waitFor(120) { onMain { currentScreen() != null } }
+            // Forge-style loaders construct mods before the Minecraft instance exists.
+            waitFor(300) { minecraft() != null }
+            val mc = Minecraft.getInstance()
+            // Any other screen that stays up (a loader warning, an error) needs a click, so fail instead of hanging.
+            waitFor(120, { "stuck on ${onMain { currentScreen() }?.javaClass?.name} instead of the title screen" }) {
+                onMain { currentScreen() is TitleScreen }
+            }
             val multiplayer = onMain {
                 val screen = JoinMultiplayerScreen(currentScreen() ?: TitleScreen())
                 MultiplayerHooks.setScreen(screen)
@@ -73,9 +78,15 @@ object SelfTest {
         } catch (e: Exception) {
             report.fail("run", e.toString())
         } finally {
-            report.write(mc.gameDirectory)
+            report.write()
+            if (SelfTestReport.exitWhenDone) {
+                val mc = minecraft()
+                if (mc != null) mc.execute { mc.stop() } else Runtime.getRuntime().halt(1)
+            }
         }
     }
+
+    private fun minecraft(): Minecraft? = Minecraft.getInstance()
 
     private fun currentScreen(): Screen? = Minecraft.getInstance().gui.screen()
 
@@ -91,10 +102,10 @@ object SelfTest {
         return result.get(30, TimeUnit.SECONDS)
     }
 
-    private fun waitFor(seconds: Long, condition: () -> Boolean) {
+    private fun waitFor(seconds: Long, describe: () -> String = { "" }, condition: () -> Boolean) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds)
         while (!condition()) {
-            if (System.nanoTime() > deadline) throw IllegalStateException("timed out after ${seconds}s")
+            if (System.nanoTime() > deadline) throw IllegalStateException("timed out after ${seconds}s ${describe()}".trim())
             Thread.sleep(100)
         }
     }
