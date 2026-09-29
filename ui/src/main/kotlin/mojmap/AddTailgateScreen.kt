@@ -104,7 +104,8 @@ class AddTailgateScreen(private val parent: Screen) : Screen(title()) {
     /*override fun render(poseStack: PoseStack, mouseX: Int, mouseY: Int, delta: Float) {
         renderBackground(poseStack)
         super.render(poseStack, mouseX, mouseY, delta)
-        draw { text, x, y, color -> drawString(poseStack, font, text, x, y, color) }
+        // Not drawString: it turned static in 1.16.2, and 1.16.1 runs this build too.
+        draw { text, x, y, color -> font.drawShadow(poseStack, text, x.toFloat(), y.toFloat(), color) }
     }
     *///?} else {
     /*override fun render(mouseX: Int, mouseY: Int, delta: Float) {
