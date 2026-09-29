@@ -32,8 +32,10 @@ object SelfTest {
             waitFor(300) { minecraft() != null }
             val mc = Minecraft.getInstance()
             // Any other screen that stays up (a loader warning, an error) needs a click, so fail instead of hanging.
+            // Wait out the loading overlay too: Forge 1.14.2 shows the title screen under it before
+            // its event bus starts, and a player can't click through it either.
             waitFor(120, { "stuck on ${onMain { currentScreen() }?.javaClass?.name} instead of the title screen" }) {
-                onMain { currentScreen() is TitleScreen }
+                onMain { currentScreen() is TitleScreen && !Compat.loading() }
             }
             val multiplayer = onMain {
                 val screen = JoinMultiplayerScreen(currentScreen() ?: TitleScreen())
@@ -53,6 +55,9 @@ object SelfTest {
                 report.fail("screen", "the Add screen didn't open")
                 return
             }
+            // Two more trips through the main thread let the Add screen draw at least one frame,
+            // so a broken render call fails here instead of in front of a player.
+            repeat(2) { onMain { } }
             report.pass("screen")
 
             onMain {

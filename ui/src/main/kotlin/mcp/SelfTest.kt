@@ -59,6 +59,9 @@ object SelfTest {
                 report.fail("screen", "the Add screen didn't open")
                 return
             }
+            // Two more trips through the main thread let the Add screen draw at least one frame,
+            // so a broken render call fails here instead of in front of a player.
+            repeat(2) { onMain { } }
             report.pass("screen")
 
             onMain {

@@ -60,6 +60,14 @@ object Compat {
         /*Minecraft.getInstance().screen
         *///?}
 
+    /** Whether a loading overlay (resource or mod loading) still covers the screen. */
+    fun loading(): Boolean =
+        //? if >=26.2 {
+        Minecraft.getInstance().gui.overlay() != null
+        //?} else {
+        /*Minecraft.getInstance().overlay != null
+        *///?}
+
     fun serverData(name: String, address: String): ServerData =
         //? if >=1.20.2 {
         ServerData(name, address, ServerData.Type.OTHER)
