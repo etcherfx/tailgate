@@ -73,7 +73,7 @@ Funnel's relays don't decrypt the traffic: TLS runs from Tailgate to Tailscale o
 
 ## Building
 
-Builds need JDK 25; everything compiles to Java 8 bytecode. `gradle.properties` points `org.gradle.java.home` at a JDK 25 install. Change it to yours, or override it with `-Dorg.gradle.java.home=<path>`.
+Builds run on JDK 25; everything compiles to Java 8 bytecode. Gradle finds an installed JDK 25 (`JAVA_HOME`, SDKMAN, `~/.jdks`, or your OS's usual locations) or downloads one automatically. Starting `./gradlew` itself takes JDK 17 or newer on `JAVA_HOME` or `PATH`.
 
 ```sh
 ./gradlew build                        # core tests, plus the UI for the active node (26.3-fabric)
@@ -95,8 +95,10 @@ How it fits together:
 `scripts/runtime-test.py` launches a real game with the merged jar and runs Tailgate's in-game self-test. The self-test opens Multiplayer, uses the Tailgate button, tests against a local TLS server, and adds an entry. It needs [uv](https://docs.astral.sh/uv/) and a JDK for that release's Java version:
 
 ```sh
-uv run scripts/runtime-test.py 1.20.1-forge --java 17=/path/to/jdk-17 --java 25=/path/to/jdk-25
+uv run scripts/runtime-test.py 1.20.1-forge
 ```
+
+The script finds each release's JDK in the standard install locations, falling back to the nearest newer JDK. Pass `--java N=<home>` to choose one yourself. Releases that need Java 8 won't run on anything newer, so the script stops if it can't find a Java 8 JDK.
 
 It installs Minecraft with [HeadlessMC](https://github.com/headlesshq/headlessmc), exits 0 on pass, and never waits for input. A window opens while the game runs; on Linux, wrap the command in `xvfb-run`. CI runs it for a smoke set of releases on every push, and for every release on tags.
 
