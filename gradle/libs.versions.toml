@@ -1,0 +1,26 @@
+[versions]
+kotlin = "2.4.20"
+stonecutter = "0.9.8"
+unimined = "1.4.2-SNAPSHOT"
+asm = "9.10.1"
+tomlj = "2.1.1"
+unimined-mapping-library = "1.2.2"
+junit = "5.14.4"
+junit-platform = "1.14.4"
+bouncycastle = "1.86"
+log4j-legacy = "2.0-beta9"
+
+[libraries]
+kotlin-stdlib = { module = "org.jetbrains.kotlin:kotlin-stdlib", version.ref = "kotlin" }
+kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
+stonecutter-gradle-plugin = { module = "dev.kikugie:stonecutter", version.ref = "stonecutter" }
+unimined-gradle-plugin = { module = "xyz.wagyourtail.unimined:unimined", version.ref = "unimined" }
+unimined-mapping-library = { module = "xyz.wagyourtail.unimined.mapping:unimined-mapping-library-jvm", version.ref = "unimined-mapping-library" }
+asm = { module = "org.ow2.asm:asm", version.ref = "asm" }
+asm-commons = { module = "org.ow2.asm:asm-commons", version.ref = "asm" }
+asm-tree = { module = "org.ow2.asm:asm-tree", version.ref = "asm" }
+tomlj = { module = "org.tomlj:tomlj", version.ref = "tomlj" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher", version.ref = "junit-platform" }
+bouncycastle-pkix = { module = "org.bouncycastle:bcpkix-jdk18on", version.ref = "bouncycastle" }
+log4j-api-legacy = { module = "org.apache.logging.log4j:log4j-api", version.ref = "log4j-legacy" }

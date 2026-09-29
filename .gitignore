@@ -1,0 +1,24 @@
+# gradle
+.gradle/
+.kotlin/
+build/
+out/
+
+# stonecutter
+ui/versions/*/
+!ui/versions/*/gradle.properties
+
+# ide
+.idea/
+*.iml
+.vscode/
+bin/
+.classpath
+.project
+.settings/
+
+# runtime
+run/
+*.hprof
+hs_err_*.log
+.DS_Store
