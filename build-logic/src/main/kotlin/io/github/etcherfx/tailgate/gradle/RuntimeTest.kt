@@ -211,13 +211,20 @@ abstract class RuntimeTest : DefaultTask() {
         )
         val command = listOf(loader, mc) + (loaderVersion.orNull?.let { listOf("--uid", it) } ?: emptyList())
         logger.lifecycle("Installing ${command.joinToString(" ")} with HeadlessMC")
-        try {
-            execOperations.exec {
-                commandLine(listOf(toolJava, "-jar", hmc.path, "--command") + command)
-                workingDir = work
+        // HeadlessMC tries each download once, and loader Maven servers sometimes drop requests.
+        for (attempt in 1..INSTALL_ATTEMPTS) {
+            try {
+                execOperations.exec {
+                    commandLine(listOf(toolJava, "-jar", hmc.path, "--command") + command)
+                    workingDir = work
+                }
+                break
+            } catch (e: Exception) {
+                if (attempt == INSTALL_ATTEMPTS) throw GradleException("HeadlessMC couldn't install ${command.joinToString(" ")}", e)
+                val delay = INSTALL_RETRY_DELAY * attempt
+                logger.lifecycle("HeadlessMC couldn't install ${command.joinToString(" ")}; retrying in ${delay}s")
+                Thread.sleep(TimeUnit.SECONDS.toMillis(delay))
             }
-        } catch (e: Exception) {
-            throw GradleException("HeadlessMC couldn't install ${command.joinToString(" ")}", e)
         }
         return findVersion(mcdir, mc, loader) ?: throw GradleException("HeadlessMC didn't install a $loader version for $mc")
     }
@@ -545,6 +552,8 @@ abstract class RuntimeTest : DefaultTask() {
         const val HMC_URL = "https://github.com/headlesshq/headlessmc/releases/download/$HMC_VERSION/headlessmc-launcher-$HMC_VERSION.jar"
         const val FIXTURE_MAIN = "io.github.etcherfx.tailgate.core.SelfTestFixture"
         const val FIXTURE_TIMEOUT = 300L
+        const val INSTALL_ATTEMPTS = 3
+        const val INSTALL_RETRY_DELAY = 15L
         const val POLL_MS = 500L
         const val LOADER_ERROR_GRACE = 10L
         const val REPORT_GRACE = 30L
