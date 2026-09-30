@@ -149,8 +149,8 @@ jobs:
         with:
           cache-read-only: true
       - name: Install Xvfb
-        # LWJGL 2 (Minecraft 1.12 and older) queries display modes through xrandr.
-        run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb x11-xserver-utils libegl-mesa0
+        # LWJGL 2 (Minecraft 1.12 and older) queries display modes through xrandr; Minecraft 26.3 needs EGL.
+        run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb x11-xserver-utils libegl1 libegl-mesa0
       - uses: actions/download-artifact@v8
         with:
           name: tailgate-jar
@@ -159,7 +159,7 @@ jobs:
         env:
           NODE: ${{ matrix.node }}
           # Minecraft 26.3 opens its window with SDL3, whose GLX path finds no matching visual under
-          # Xvfb (neither does NeoForge's early window); EGL gets an OpenGL context from Mesa.
+          # Xvfb; EGL gets an OpenGL context from Mesa.
           SDL_VIDEO_FORCE_EGL: 1
         run: >
           xvfb-run -a ./gradlew runtimeTest --node "$NODE" --timeout 900 --console=plain -Ptailgate.nodes=none
