@@ -89,6 +89,10 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/master' }}
+          # Each group's Minecraft setups take several GB, so all groups' entries can't fit in the
+          # 10 GB Actions cache and they evicted each other along with the downloaded dependencies.
+          # Leave them out; Unimined sets Minecraft up again, and the dependencies stay cached.
+          gradle-home-cache-excludes: caches/unimined
       - name: Build UI nodes
         env:
           NODES: ${{ matrix.nodes }}
