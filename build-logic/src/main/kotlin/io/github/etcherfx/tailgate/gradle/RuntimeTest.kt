@@ -24,7 +24,9 @@ import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.jvm.toolchain.JavaToolchainService
 import org.gradle.process.ExecOperations
 import java.io.File
+import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.OutputStream
 import java.io.RandomAccessFile
 import java.net.URI
 import java.net.http.HttpClient
@@ -210,23 +212,37 @@ abstract class RuntimeTest : DefaultTask() {
             ).joinToString("\n", postfix = "\n"),
         )
         val command = listOf(loader, mc) + (loaderVersion.orNull?.let { listOf("--uid", it) } ?: emptyList())
-        logger.lifecycle("Installing ${command.joinToString(" ")} with HeadlessMC")
+        val name = command.joinToString(" ")
+        logger.lifecycle("Installing $name with HeadlessMC")
         // HeadlessMC tries each download once, and loader Maven servers sometimes drop requests.
         for (attempt in 1..INSTALL_ATTEMPTS) {
-            try {
-                execOperations.exec {
-                    commandLine(listOf(toolJava, "-jar", hmc.path, "--command") + command)
-                    workingDir = work
-                }
-                break
-            } catch (e: Exception) {
-                if (attempt == INSTALL_ATTEMPTS) throw GradleException("HeadlessMC couldn't install ${command.joinToString(" ")}", e)
-                val delay = INSTALL_RETRY_DELAY * attempt
-                logger.lifecycle("HeadlessMC couldn't install ${command.joinToString(" ")}; retrying in ${delay}s")
-                Thread.sleep(TimeUnit.SECONDS.toMillis(delay))
-            }
+            val failure = runHeadlessMc(work, toolJava, hmc, command, mcdir, mc, loader) ?: break
+            if (attempt == INSTALL_ATTEMPTS) throw GradleException("HeadlessMC couldn't install $name: $failure")
+            val delay = INSTALL_RETRY_DELAY * attempt
+            logger.lifecycle("HeadlessMC couldn't install $name ($failure); retrying in ${delay}s")
+            Thread.sleep(TimeUnit.SECONDS.toMillis(delay))
         }
         return findVersion(mcdir, mc, loader) ?: throw GradleException("HeadlessMC didn't install a $loader version for $mc")
+    }
+
+    /** Runs one HeadlessMC install; returns why it failed, or null when it succeeded. */
+    private fun runHeadlessMc(work: File, toolJava: String, hmc: File, command: List<String>, mcdir: File, mc: String, loader: String): String? {
+        val output = ByteArrayOutputStream()
+        try {
+            execOperations.exec {
+                commandLine(listOf(toolJava, "-jar", hmc.path, "--command") + command)
+                workingDir = work
+                standardOutput = Tee(standardOutput, output)
+                errorOutput = Tee(errorOutput, output)
+            }
+        } catch (e: Exception) {
+            return e.message ?: e.toString()
+        }
+        // Forge's and NeoForge's installers carry on when a library download fails, and HeadlessMC
+        // then reports success; the game can't start from that install, so remove it and retry.
+        if (INCOMPLETE_INSTALL !in output.toString(Charsets.UTF_8.name())) return null
+        findVersion(mcdir, mc, loader)?.let { deleteTree(mcdir.resolve("versions/$it")) }
+        return "the installer couldn't download some libraries"
     }
 
     private fun findVersion(mcdir: File, mc: String, loader: String): String? {
@@ -489,6 +505,24 @@ abstract class RuntimeTest : DefaultTask() {
 
     // --- processes and files --------------------------------------------------------------------
 
+    /** Writes everything to both [first] and [second]. */
+    private class Tee(private val first: OutputStream, private val second: OutputStream) : OutputStream() {
+        override fun write(b: Int) {
+            first.write(b)
+            second.write(b)
+        }
+
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            first.write(b, off, len)
+            second.write(b, off, len)
+        }
+
+        override fun flush() {
+            first.flush()
+            second.flush()
+        }
+    }
+
     /** How a launch ended: [summary] for the result line, and the loader's error if it logged one. */
     private class GameRun(val summary: String, val loaderError: String?)
 
@@ -554,6 +588,7 @@ abstract class RuntimeTest : DefaultTask() {
         const val FIXTURE_TIMEOUT = 300L
         const val INSTALL_ATTEMPTS = 3
         const val INSTALL_RETRY_DELAY = 15L
+        const val INCOMPLETE_INSTALL = "These libraries failed to download"
         const val POLL_MS = 500L
         const val LOADER_ERROR_GRACE = 10L
         const val REPORT_GRACE = 30L
