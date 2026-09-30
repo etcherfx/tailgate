@@ -120,6 +120,10 @@ jobs:
           path: build/nodes
       - name: Merge and verify
         run: ./gradlew mergeJar verifyJar --console=plain -Ptailgate.prebuiltNodes=true
+      - name: Resolve the runtime test's dependencies
+        # The runtime jobs restore this job's Gradle cache entry, the newest when they start, so they
+        # find these here instead of all downloading them from Maven Central at once.
+        run: ./gradlew :core:testClasses --console=plain -Ptailgate.nodes=none
       - uses: actions/upload-artifact@v7
         with:
           name: tailgate-jar
