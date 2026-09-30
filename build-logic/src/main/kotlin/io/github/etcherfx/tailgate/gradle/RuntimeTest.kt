@@ -565,7 +565,7 @@ abstract class RuntimeTest : DefaultTask() {
         const val HMC_URL = "https://github.com/headlesshq/headlessmc/releases/download/$HMC_VERSION/headlessmc-launcher-$HMC_VERSION.jar"
         const val FIXTURE_MAIN = "io.github.etcherfx.tailgate.core.SelfTestFixture"
         const val FIXTURE_TIMEOUT = 300L
-        const val INSTALL_ATTEMPTS = 3
+        const val INSTALL_ATTEMPTS = 5
         const val INSTALL_RETRY_DELAY = 15L
         const val INSTALL_TIMEOUT = 600L
         const val HTTP_TIMEOUT_MS = 60_000
