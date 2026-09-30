@@ -33,6 +33,9 @@ class Forwarder(
     @Volatile
     private var server: ServerSocket? = null
 
+    @Volatile
+    private var listener: Thread? = null
+
     val localPort: Int get() = server?.localPort ?: -1
 
     val isRunning: Boolean get() = server?.isClosed == false
@@ -52,13 +55,23 @@ class Forwarder(
             bind(0)
         }
         server = socket
-        daemon("Tailgate listener $label") { acceptLoop(socket) }
+        listener = daemon("Tailgate listener $label") { acceptLoop(socket) }
         log.info("Forwarding 127.0.0.1:${socket.localPort} to $target over TLS")
         return socket.localPort
     }
 
+    /** Stops listening and drops open connections; the port is free again when this returns. */
     override fun close() {
         server?.let { closeQuietly(it) }
+        // Linux releases the port only once the accept() blocked on it returns, which can be after
+        // close() does; wait for the listener so the port can be bound again straight away.
+        listener?.takeIf { it !== Thread.currentThread() }?.let {
+            try {
+                it.join(CLOSE_WAIT_MS)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+        }
         synchronized(sockets) { sockets.toList() }.forEach { closeQuietly(it) }
     }
 
@@ -202,9 +215,14 @@ class Forwarder(
         }
     }
 
-    private fun daemon(name: String, body: () -> Unit) {
+    private fun daemon(name: String, body: () -> Unit): Thread {
         val thread = Thread(body, name)
         thread.isDaemon = true
         thread.start()
+        return thread
+    }
+
+    private companion object {
+        const val CLOSE_WAIT_MS = 2_000L
     }
 }
