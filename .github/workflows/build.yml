@@ -149,8 +149,9 @@ jobs:
         with:
           cache-read-only: true
       - name: Install Xvfb
-        # LWJGL 2 (Minecraft 1.12 and older) queries display modes through xrandr.
-        run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb x11-xserver-utils
+        # LWJGL 2 (Minecraft 1.12 and older) queries display modes through xrandr. Minecraft 26.3's
+        # renderer finds no usable GLX visual under Xvfb and needs Mesa's software Vulkan instead.
+        run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xvfb x11-xserver-utils mesa-vulkan-drivers
       - uses: actions/download-artifact@v8
         with:
           name: tailgate-jar
@@ -158,9 +159,8 @@ jobs:
       - name: Launch Minecraft with the self-test
         env:
           NODE: ${{ matrix.node }}
-        # xvfb-run's default 8-bit screen has no GLX visual Minecraft 26.3's renderer accepts.
         run: >
-          xvfb-run -a -s "-screen 0 1280x1024x24" ./gradlew runtimeTest --node "$NODE" --timeout 900 --console=plain -Ptailgate.nodes=none
+          xvfb-run -a ./gradlew runtimeTest --node "$NODE" --timeout 900 --console=plain -Ptailgate.nodes=none
           -Porg.gradle.java.installations.fromEnv=JAVA_HOME_8_X64,JAVA_HOME_17_X64,JAVA_HOME_21_X64,JAVA_HOME_25_X64
           -Porg.gradle.java.installations.auto-download=false
       - if: always()
