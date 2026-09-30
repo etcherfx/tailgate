@@ -85,7 +85,9 @@ abstract class CiMatrix : DefaultTask() {
 
     private companion object {
         val LOADERS = listOf("fabric", "forge", "neoforge")
-        val GROUP_SIZE = mapOf("fabric" to 8, "forge" to 5, "neoforge" to 6)
+        // Every group caches its own copy of the shared dependencies, so fewer groups keep the Actions
+        // cache under its limit. Forge nodes take the longest to build, so its groups are smaller.
+        val GROUP_SIZE = mapOf("fabric" to 16, "forge" to 7, "neoforge" to 11)
 
         val SMOKE = listOf(
             // Fabric: 26.2 moved setScreen to Gui; 26.1 render extraction; 1.20.2 background and ServerData.Type;
