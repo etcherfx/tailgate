@@ -22,20 +22,14 @@ import org.gradle.api.tasks.TaskAction
 import org.gradle.api.tasks.options.Option
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.jvm.toolchain.JavaToolchainService
-import org.gradle.process.ExecOperations
 import java.io.File
-import java.io.ByteArrayOutputStream
 import java.io.IOException
-import java.io.OutputStream
 import java.io.RandomAccessFile
 import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
+import java.net.HttpURLConnection
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
-import java.time.Duration
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -104,9 +98,6 @@ abstract class RuntimeTest : DefaultTask() {
 
     @get:Inject
     protected abstract val javaToolchains: JavaToolchainService
-
-    @get:Inject
-    protected abstract val execOperations: ExecOperations
 
     init {
         timeoutSeconds.convention("600")
@@ -197,7 +188,7 @@ abstract class RuntimeTest : DefaultTask() {
         val hmc = work.resolve("headlessmc-launcher-$HMC_VERSION.jar")
         if (!hmc.exists()) {
             logger.lifecycle("Downloading HeadlessMC $HMC_VERSION")
-            if (!fetch(httpClient(), HMC_URL, hmc, null)) throw GradleException("couldn't download HeadlessMC")
+            if (!fetch(HMC_URL, hmc, null)) throw GradleException("couldn't download HeadlessMC")
         }
         writeText(
             work.resolve("HeadlessMC/config.properties"),
@@ -227,20 +218,23 @@ abstract class RuntimeTest : DefaultTask() {
 
     /** Runs one HeadlessMC install; returns why it failed, or null when it succeeded. */
     private fun runHeadlessMc(work: File, toolJava: String, hmc: File, command: List<String>, mcdir: File, mc: String, loader: String): String? {
-        val output = ByteArrayOutputStream()
-        try {
-            execOperations.exec {
-                commandLine(listOf(toolJava, "-jar", hmc.path, "--command") + command)
-                workingDir = work
-                standardOutput = Tee(standardOutput, output)
-                errorOutput = Tee(errorOutput, output)
-            }
-        } catch (e: Exception) {
-            return e.message ?: e.toString()
+        val log = work.resolve("headlessmc.log")
+        // Headless, so an old Forge installer's error dialog fails the install instead of waiting for
+        // a click; the time limit covers installers stuck on a download that never finishes.
+        val process = start(listOf(toolJava, "-Djava.awt.headless=true", "-jar", hmc.path, "--command") + command, work, log)
+        process.outputStream.close()
+        val finished = try {
+            process.waitFor(INSTALL_TIMEOUT, TimeUnit.SECONDS)
+        } finally {
+            killTree(process)
         }
+        val output = log.readText()
+        logger.lifecycle(output.trimEnd())
+        if (!finished) return "it didn't finish within ${INSTALL_TIMEOUT}s"
+        if (process.exitValue() != 0) return "HeadlessMC exited with ${process.exitValue()}"
         // Forge's and NeoForge's installers carry on when a library download fails, and HeadlessMC
         // then reports success; the game can't start from that install, so remove it and retry.
-        if (INCOMPLETE_INSTALL !in output.toString(Charsets.UTF_8.name())) return null
+        if (INCOMPLETE_INSTALL !in output) return null
         findVersion(mcdir, mc, loader)?.let { deleteTree(mcdir.resolve("versions/$it")) }
         return "the installer couldn't download some libraries"
     }
@@ -332,10 +326,9 @@ abstract class RuntimeTest : DefaultTask() {
 
         if (downloads.isNotEmpty()) {
             logger.lifecycle("Downloading ${downloads.size} libraries")
-            val http = httpClient()
             val pool = Executors.newFixedThreadPool(DOWNLOAD_THREADS)
             try {
-                pool.invokeAll(downloads.map { (file, source) -> Callable { fetch(http, source.first, file, source.second) } })
+                pool.invokeAll(downloads.map { (file, source) -> Callable { fetch(source.first, file, source.second) } })
                     .forEach { it.get() }
             } finally {
                 pool.shutdownNow()
@@ -453,19 +446,23 @@ abstract class RuntimeTest : DefaultTask() {
     }
 
     /** Downloads [url] to [file], checking [sha1] when given; returns whether it succeeded. */
-    private fun fetch(http: HttpClient, url: String, file: File, sha1: String?): Boolean {
+    private fun fetch(url: String, file: File, sha1: String?): Boolean {
         file.parentFile.mkdirs()
         val part = File(file.path + ".part")
         for (attempt in 0 until DOWNLOAD_ATTEMPTS) {
             try {
-                val request = HttpRequest.newBuilder(URI(url)).timeout(Duration.ofSeconds(60)).build()
-                val status = http.send(request, HttpResponse.BodyHandlers.ofFile(part.toPath())).statusCode()
+                // URLConnection rather than HttpClient: its read timeout also catches a body that stalls.
+                val connection = URI(url).toURL().openConnection() as HttpURLConnection
+                connection.connectTimeout = HTTP_TIMEOUT_MS
+                connection.readTimeout = HTTP_TIMEOUT_MS
+                val status = connection.responseCode
                 if (status == 404) {
-                    part.delete()
+                    connection.disconnect()
                     logger.warn("couldn't download $url: HTTP 404")
                     return false
                 }
                 if (status != 200) throw IOException("HTTP $status")
+                connection.inputStream.use { Files.copy(it, part.toPath(), StandardCopyOption.REPLACE_EXISTING) }
                 // Mojang's version files only publish SHA-1; this catches truncated downloads.
                 if (sha1 != null && sha1(part) != sha1) throw IOException("checksum mismatch")
                 Files.move(part.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
@@ -504,24 +501,6 @@ abstract class RuntimeTest : DefaultTask() {
     }
 
     // --- processes and files --------------------------------------------------------------------
-
-    /** Writes everything to both [first] and [second]. */
-    private class Tee(private val first: OutputStream, private val second: OutputStream) : OutputStream() {
-        override fun write(b: Int) {
-            first.write(b)
-            second.write(b)
-        }
-
-        override fun write(b: ByteArray, off: Int, len: Int) {
-            first.write(b, off, len)
-            second.write(b, off, len)
-        }
-
-        override fun flush() {
-            first.flush()
-            second.flush()
-        }
-    }
 
     /** How a launch ended: [summary] for the result line, and the loader's error if it logged one. */
     private class GameRun(val summary: String, val loaderError: String?)
@@ -588,6 +567,8 @@ abstract class RuntimeTest : DefaultTask() {
         const val FIXTURE_TIMEOUT = 300L
         const val INSTALL_ATTEMPTS = 3
         const val INSTALL_RETRY_DELAY = 15L
+        const val INSTALL_TIMEOUT = 600L
+        const val HTTP_TIMEOUT_MS = 60_000
         const val INCOMPLETE_INSTALL = "These libraries failed to download"
         const val POLL_MS = 500L
         const val LOADER_ERROR_GRACE = 10L
@@ -616,9 +597,6 @@ abstract class RuntimeTest : DefaultTask() {
             else -> "linux"
         }
         val IS_ARM = System.getProperty("os.arch").lowercase() in setOf("arm64", "aarch64")
-
-        fun httpClient(): HttpClient =
-            HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).connectTimeout(Duration.ofSeconds(60)).build()
 
         fun sha1(file: File): String {
             val digest = MessageDigest.getInstance("SHA-1")
