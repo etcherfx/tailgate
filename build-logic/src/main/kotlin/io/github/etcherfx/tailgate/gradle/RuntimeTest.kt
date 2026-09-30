@@ -25,6 +25,7 @@ import org.gradle.jvm.toolchain.JavaToolchainService
 import org.gradle.process.ExecOperations
 import java.io.File
 import java.io.IOException
+import java.io.RandomAccessFile
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -51,8 +52,9 @@ import javax.inject.Inject
  * 4. Reads `tailgate-selftest.txt` and fails the task unless it reports a pass.
  *
  * Nothing waits for a human: the self-test fails and quits the game when a screen other than the
- * title screen stays up (a loader warning, an error), and a hard timeout kills the whole process
- * tree. Launching bypasses HeadlessMC's `-lwjgl` mode, whose ASM can't read the Java 27 classes in
+ * title screen stays up (a loader warning, an error). When the loader itself fails and shows its
+ * error screen, the task spots the error in the game's log and kills the game; a hard timeout
+ * kills the whole process tree. Launching bypasses HeadlessMC's `-lwjgl` mode, whose ASM can't read the Java 27 classes in
  * LWJGL 3.4.3 (Minecraft 26.x), so the game needs a display: on Linux CI run Gradle under
  * `xvfb-run`; elsewhere a window opens briefly.
  *
@@ -147,7 +149,7 @@ abstract class RuntimeTest : DefaultTask() {
         )
         val gamedir: File
         val log: File
-        val code: Int?
+        val run: GameRun
         try {
             val address = waitForFile(fixtureDir.resolve("address.txt"), FIXTURE_TIMEOUT, fixture).trim()
             gamedir = prepareGamedir(work.resolve("run/$node"), jar)
@@ -157,19 +159,21 @@ abstract class RuntimeTest : DefaultTask() {
                 "-Djavax.net.ssl.trustStorePassword=changeit",
             )
             log = gamedir.resolve("game.log")
-            code = launch(mcdir, version, gamedir, java, jvm, log, seconds)
+            run = launch(mcdir, version, gamedir, java, jvm, log, seconds)
         } finally {
             killTree(fixture)
         }
 
         val report = gamedir.resolve("tailgate-selftest.txt")
         val text = if (report.exists()) report.readText() else ""
-        logger.lifecycle("== $node ($version), game exit ${code ?: "none (timed out)"}")
+        logger.lifecycle("== $node ($version), ${run.summary}")
         logger.lifecycle(text.trimEnd().ifEmpty { "no tailgate-selftest.txt written" })
         if ("result=pass" in text) return
         logger.lifecycle("-- last lines of $log")
         if (log.exists()) logger.lifecycle(log.readLines().takeLast(60).joinToString("\n"))
-        throw GradleException("the in-game self-test didn't pass for $node")
+        throw GradleException(
+            run.loaderError?.let { "$node didn't load the mod: $it" } ?: "the in-game self-test didn't pass for $node",
+        )
     }
 
     private fun findJar(): File {
@@ -258,7 +262,7 @@ abstract class RuntimeTest : DefaultTask() {
         return gamedir
     }
 
-    private fun launch(mcdir: File, version: String, gamedir: File, java: String, extraJvm: List<String>, log: File, seconds: Long): Int? {
+    private fun launch(mcdir: File, version: String, gamedir: File, java: String, extraJvm: List<String>, log: File, seconds: Long): GameRun {
         val versions = chain(mcdir, version)
         val base = versions.last()
         val baseId = base.str("id")!!
@@ -365,12 +369,47 @@ abstract class RuntimeTest : DefaultTask() {
         logger.lifecycle("Launching $version with $java (timeout ${seconds}s)")
         val process = start(command, gamedir, log)
         try {
-            if (process.waitFor(seconds, TimeUnit.SECONDS)) return process.exitValue()
-            logger.lifecycle("timed out after ${seconds}s; killing the game")
-            return null
+            return watch(process, log, gamedir.resolve("tailgate-selftest.txt"), seconds)
         } finally {
             killTree(process)
         }
+    }
+
+    /**
+     * Waits up to [seconds] for the game to exit. Stops it sooner once [log] shows a loader error or
+     * the self-test has written [report], since the game can otherwise sit on an error screen.
+     */
+    private fun watch(process: Process, log: File, report: File, seconds: Long): GameRun {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds)
+        val tail = LogTail(log)
+        var loaderError: String? = null
+        var stopAt: Long? = null
+        var stopReason = ""
+        while (!process.waitFor(POLL_MS, TimeUnit.MILLISECONDS)) {
+            val now = System.nanoTime()
+            if (now - deadline >= 0) {
+                logger.lifecycle("timed out after ${seconds}s; killing the game")
+                return GameRun("game exit none (timed out)", loaderError)
+            }
+            if (loaderError == null) {
+                loaderError = tail.read().firstOrNull { line -> LOADER_ERRORS.any { it in line } }?.trim()
+                if (loaderError != null) {
+                    logger.lifecycle("The loader failed: $loaderError")
+                    // Leave the loader a moment to finish logging the error and any crash report.
+                    stopAt = now + TimeUnit.SECONDS.toNanos(LOADER_ERROR_GRACE)
+                    stopReason = "after a loader error"
+                }
+            }
+            if (stopAt == null && report.exists() && "result=" in report.readText()) {
+                stopAt = now + TimeUnit.SECONDS.toNanos(REPORT_GRACE)
+                stopReason = "after writing its report"
+            }
+            if (stopAt != null && now - stopAt >= 0) {
+                logger.lifecycle("The game is still running $stopReason; killing it")
+                return GameRun("game stopped $stopReason", loaderError)
+            }
+        }
+        return GameRun("game exit ${process.exitValue()}", loaderError)
     }
 
     private fun libraryFile(
@@ -443,6 +482,29 @@ abstract class RuntimeTest : DefaultTask() {
 
     // --- processes and files --------------------------------------------------------------------
 
+    /** How a launch ended: [summary] for the result line, and the loader's error if it logged one. */
+    private class GameRun(val summary: String, val loaderError: String?)
+
+    /** Reads the lines [file] gained since the last call; a line still being written waits for the next. */
+    private class LogTail(private val file: File) {
+        private var position = 0L
+        private var pending = ByteArray(0)
+
+        fun read(): List<String> {
+            val size = file.length()
+            if (size <= position) return emptyList()
+            val chunk = RandomAccessFile(file, "r").use { raf ->
+                raf.seek(position)
+                ByteArray((size - position).toInt()).also { raf.readFully(it) }
+            }
+            position = size
+            val bytes = pending + chunk
+            val end = bytes.lastIndexOf('\n'.code.toByte())
+            pending = bytes.copyOfRange(end + 1, bytes.size)
+            return if (end < 0) emptyList() else String(bytes, 0, end, Charsets.UTF_8).lines()
+        }
+    }
+
     private fun start(command: List<String>, dir: File, log: File): Process =
         try {
             ProcessBuilder(command).directory(dir).redirectErrorStream(true).redirectOutput(log).start()
@@ -483,6 +545,19 @@ abstract class RuntimeTest : DefaultTask() {
         const val HMC_URL = "https://github.com/headlesshq/headlessmc/releases/download/$HMC_VERSION/headlessmc-launcher-$HMC_VERSION.jar"
         const val FIXTURE_MAIN = "io.github.etcherfx.tailgate.core.SelfTestFixture"
         const val FIXTURE_TIMEOUT = 300L
+        const val POLL_MS = 500L
+        const val LOADER_ERROR_GRACE = 10L
+        const val REPORT_GRACE = 30L
+
+        /** Log lines a loader writes before it shows an error screen that waits for a click. */
+        val LOADER_ERRORS = listOf(
+            "Incompatible mods found!", // Fabric
+            "Missing or unsupported mandatory dependencies", // Forge and NeoForge 1.13+
+            "Error during pre-loading phase",
+            "to a broken mod state",
+            "Failed to start FML", // NeoForge 26.x, e.g. a corrupted install
+            "Not beginning mod initialization phase", // Forge 1.7.10–1.12.2
+        )
         const val DOWNLOAD_THREADS = 8
         const val DOWNLOAD_ATTEMPTS = 3
         val LOADER_IDS = mapOf("fabric" to "fabric-loader", "forge" to "forge", "neoforge" to "neoforge")
