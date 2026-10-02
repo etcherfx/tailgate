@@ -9,6 +9,7 @@
 <img alt="forge" height="56" src="https://cdn.jsdelivr.net/npm/@intergrav/devins-badges@3/assets/cozy/supported/forge_vector.svg">
 <img alt="neoforge" height="56" src="https://cdn.jsdelivr.net/npm/@intergrav/devins-badges@3/assets/cozy/supported/neoforge_vector.svg">
 
+[![Release](https://img.shields.io/github/v/release/etcherfx/tailgate?style=for-the-badge)](https://github.com/etcherfx/tailgate/releases/latest)
 [![Build](https://img.shields.io/github/actions/workflow/status/etcherfx/tailgate/build.yml?branch=master&style=for-the-badge)](https://github.com/etcherfx/tailgate/actions/workflows/build.yml)
 
 **A Minecraft mod for joining a friend's Tailscale Funnel server without Tailscale or an account.**
