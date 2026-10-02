@@ -44,7 +44,8 @@ Gradle runs on JDK 25 (`gradle/gradle-daemon-jvm.properties`); starting `./gradl
 - Tasks that don't build the mod (`ciMatrix`, `runtimeTest`, `:core:test`) should run with `-Ptailgate.nodes=none`; otherwise Gradle sets up the active node's Minecraft first.
 - The root project can't resolve another project's configuration (Gradle fails with "attempted without an exclusive lock"); `TailgateMergePlugin` declares its own `tailgateSelfTestFixture` configuration instead.
 - Under Xvfb, Minecraft 26.3's SDL3 window needs `SDL_VIDEO_FORCE_EGL=1` and `libegl1`; LWJGL 2 (1.12 and older) needs `xrandr`.
-- Forge and NeoForge installers report success after a failed library download, and Forge before 1.13 shows a Swing error dialog. `RuntimeTest` runs HeadlessMC headless, times each install out and retries it.
+- Forge and NeoForge installers report success after a failed library download, and Forge before 1.13 shows a Swing error dialog. `RuntimeTest` runs installers headless, times each install out and retries it.
+- `RuntimeTest` installs the loader build in `targets.toml`, not the newest. HeadlessMC can't find Forge 1.10's installers (their `-1.10.0` suffix), so those go through its bundled forge-cli; Forge 1.11–1.12.1 write a broken Mercurius library entry that `RuntimeTest` repairs; Forge 1.16.3/1.16.4 crash on Java 8u321+, so they run on Mojang's own Java 8 runtime.
 - maven.minecraftforge.net, maven.neoforged.net and Mojang's servers drop requests now and then. In CI, re-run the failed job before debugging.
 - The Actions cache is capped at 10 GB. Node jobs leave Unimined's setups and transforms out of their cache, and `GROUP_SIZE` in `CiMatrix.kt` keeps the group count down; more groups push the cache over and dependencies get evicted.
 

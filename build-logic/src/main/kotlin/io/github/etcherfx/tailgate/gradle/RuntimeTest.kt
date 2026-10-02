@@ -41,7 +41,8 @@ import javax.inject.Inject
  *
  *     ./gradlew runtimeTest --node 26.3-fabric -Ptailgate.nodes=none
  *
- * 1. Installs Minecraft and the loader with HeadlessMC (downloaded on first use).
+ * 1. Installs Minecraft and the loader build targets.toml lists with HeadlessMC (downloaded on
+ *    first use), or with its bundled forge-cli for Forge builds HeadlessMC can't locate.
  * 2. Starts the TLS fixture (core's `SelfTestFixture`) the self-test connects to.
  * 3. Launches the game directly with the merged jar as its only mod and
  *    `-Dtailgate.selftest=<fixture> -Dtailgate.selftest.exit=true`.
@@ -55,7 +56,9 @@ import javax.inject.Inject
  * `xvfb-run`; elsewhere a window opens briefly.
  *
  * The game runs on the smallest of Java 8, 17, 21 and 25 that its release supports, from Gradle's
- * toolchains; HeadlessMC and the fixture run on Gradle's own JVM. The task doesn't build the jar,
+ * toolchains, except Forge releases that crash on current Java 8 ([LEGACY_JAVA_FORGE]), which run on
+ * Mojang's own Java 8 runtime like the official launcher does; HeadlessMC and the fixture run on
+ * Gradle's own JVM. The task doesn't build the jar,
  * since a rebuild would replace a multi-node jar with one holding only the active node.
  */
 abstract class RuntimeTest : DefaultTask() {
@@ -69,7 +72,7 @@ abstract class RuntimeTest : DefaultTask() {
 
     @get:Input
     @get:Optional
-    @get:Option(option = "loader-version", description = "Pins the loader version (default: HeadlessMC's latest).")
+    @get:Option(option = "loader-version", description = "Pins the loader version (default: the one targets.toml lists).")
     abstract val loaderVersion: Property<String>
 
     @get:Input
@@ -126,12 +129,18 @@ abstract class RuntimeTest : DefaultTask() {
 
         val work = workDir.get().asFile
         val mcdir = work.resolve("mc")
-        val version = install(work, mcdir, mc, loader, toolJava, java)
+        val version = install(work, mcdir, target, toolJava, java)
         val required = chain(mcdir, version).firstNotNullOfOrNull {
             (it.obj("javaVersion")?.get("majorVersion") as? JsonPrimitive)?.intOrNull
         } ?: 8
         if (required > major || (required == 8 && major > 8)) {
             throw GradleException("$version asks for Java $required, but runtimeTest picked Java $major; update Target.java")
+        }
+        val gameJava = if (loader == "forge" && mc in LEGACY_JAVA_FORGE) {
+            logger.lifecycle("Forge for $mc crashes on Java 8u321 and newer; using Mojang's Java 8 runtime")
+            mojangJava(work, "jre-legacy") ?: java.also { logger.warn("Mojang has no Java 8 runtime for this platform; using $it") }
+        } else {
+            java
         }
 
         val fixtureDir = work.resolve("fixture")
@@ -152,7 +161,7 @@ abstract class RuntimeTest : DefaultTask() {
                 "-Djavax.net.ssl.trustStorePassword=changeit",
             )
             log = gamedir.resolve("game.log")
-            run = launch(mcdir, version, gamedir, java, jvm, log, seconds)
+            run = launch(mcdir, version, gamedir, gameJava, jvm, log, seconds)
         } finally {
             killTree(fixture)
         }
@@ -182,9 +191,12 @@ abstract class RuntimeTest : DefaultTask() {
 
     // --- installing -----------------------------------------------------------------------------
 
-    /** Installs the version with HeadlessMC unless present; returns its version id. */
-    private fun install(work: File, mcdir: File, mc: String, loader: String, toolJava: String, java: String): String {
-        findVersion(mcdir, mc, loader)?.let { return it }
+    /** Installs the loader build for [target] unless present; returns its version id. */
+    private fun install(work: File, mcdir: File, target: Target, toolJava: String, java: String): String {
+        val mc = target.mc
+        val loader = target.loader
+        val build = loaderVersion.orNull ?: target.loaderVersion
+        findVersion(mcdir, mc, loader, build)?.let { return it }
         val hmc = work.resolve("headlessmc-launcher-$HMC_VERSION.jar")
         if (!hmc.exists()) {
             logger.lifecycle("Downloading HeadlessMC $HMC_VERSION")
@@ -202,26 +214,54 @@ abstract class RuntimeTest : DefaultTask() {
                 "hmc.rethrow.launch.exceptions=true",
             ).joinToString("\n", postfix = "\n"),
         )
-        val command = listOf(loader, mc) + (loaderVersion.orNull?.let { listOf("--uid", it) } ?: emptyList())
-        val name = command.joinToString(" ")
-        logger.lifecycle("Installing $name with HeadlessMC")
-        // HeadlessMC tries each download once, and loader Maven servers sometimes drop requests.
+        // Headless, so an old Forge installer's error dialog fails the install instead of waiting for a click.
+        fun headlessMc(vararg command: String) = listOf(toolJava, "-Djava.awt.headless=true", "-jar", hmc.path, "--command") + command
+        // HeadlessMC adds a Forge build's Maven branch suffix itself, guessing it from the release. When
+        // targets.toml names another suffix (all of 1.10's builds end in -1.10.0), run HeadlessMC's bundled
+        // forge-cli on the right installer instead, once HeadlessMC has downloaded the release it builds
+        // on. Only pre-1.13 installers have such suffixes, and they need Java 8 and a launcher profile.
+        val uid = if (loader == "forge") build.removeSuffix("-$mc") else build
+        val installer = work.resolve("installers/forge-$mc-$build-installer.jar").takeIf { loader == "forge" && '-' in uid }
+        val installerUrl = "$FORGE_MAVEN/$mc-$build/forge-$mc-$build-installer.jar"
+        val cli = work.resolve("forge-cli-$HMC_VERSION.jar")
+        if (installer != null) {
+            if (!cli.exists()) extractEntry(hmc, "headlessmc/forge-cli.jar", cli)
+            val profiles = mcdir.resolve("launcher_profiles.json")
+            if (!profiles.exists()) writeText(profiles, """{"profiles":{}}""")
+        }
+
+        /** One install attempt; returns why it failed, or null when it succeeded. */
+        fun tryInstall(): String? {
+            if (installer == null) return runInstaller(work, headlessMc(loader, mc, "--uid", uid), mcdir, mc, loader, build)
+            if (!installer.exists() && !fetch(installerUrl, installer, null)) return "couldn't download $installerUrl"
+            val vanilla = mcdir.resolve("versions/$mc")
+            if (!vanilla.resolve("$mc.jar").exists()) {
+                // HeadlessMC asks before downloading over a partial release, and nothing would answer.
+                deleteTree(vanilla)
+                runInstaller(work, headlessMc("download", mc), mcdir, mc, loader, build)?.let { return it }
+            }
+            val command = listOf(java, "-Djava.awt.headless=true", "-jar", cli.path, "--installer", installer.path, "--target", mcdir.path)
+            return runInstaller(work, command, mcdir, mc, loader, build)
+        }
+
+        val name = "$loader $build for $mc"
+        logger.lifecycle("Installing $name")
+        // Each tool tries a download once, and loader Maven servers sometimes drop requests.
         for (attempt in 1..INSTALL_ATTEMPTS) {
-            val failure = runHeadlessMc(work, toolJava, hmc, command, mcdir, mc, loader) ?: break
-            if (attempt == INSTALL_ATTEMPTS) throw GradleException("HeadlessMC couldn't install $name: $failure")
+            val failure = tryInstall() ?: break
+            if (attempt == INSTALL_ATTEMPTS) throw GradleException("couldn't install $name: $failure")
             val delay = INSTALL_RETRY_DELAY * attempt
-            logger.lifecycle("HeadlessMC couldn't install $name ($failure); retrying in ${delay}s")
+            logger.lifecycle("Couldn't install $name ($failure); retrying in ${delay}s")
             Thread.sleep(TimeUnit.SECONDS.toMillis(delay))
         }
-        return findVersion(mcdir, mc, loader) ?: throw GradleException("HeadlessMC didn't install a $loader version for $mc")
+        return findVersion(mcdir, mc, loader, build) ?: throw GradleException("installing $name didn't add its version")
     }
 
-    /** Runs one HeadlessMC install; returns why it failed, or null when it succeeded. */
-    private fun runHeadlessMc(work: File, toolJava: String, hmc: File, command: List<String>, mcdir: File, mc: String, loader: String): String? {
-        val log = work.resolve("headlessmc.log")
-        // Headless, so an old Forge installer's error dialog fails the install instead of waiting for
-        // a click; the time limit covers installers stuck on a download that never finishes.
-        val process = start(listOf(toolJava, "-Djava.awt.headless=true", "-jar", hmc.path, "--command") + command, work, log)
+    /** Runs one install step; returns why it failed, or null when it succeeded. */
+    private fun runInstaller(work: File, command: List<String>, mcdir: File, mc: String, loader: String, build: String): String? {
+        val log = work.resolve("install.log")
+        // The time limit covers installers stuck on a download that never finishes.
+        val process = start(command, work, log)
         process.outputStream.close()
         val finished = try {
             process.waitFor(INSTALL_TIMEOUT, TimeUnit.SECONDS)
@@ -231,27 +271,88 @@ abstract class RuntimeTest : DefaultTask() {
         val output = log.readText()
         logger.lifecycle(output.trimEnd())
         if (!finished) return "it didn't finish within ${INSTALL_TIMEOUT}s"
-        if (process.exitValue() != 0) return "HeadlessMC exited with ${process.exitValue()}"
-        // Forge's and NeoForge's installers carry on when a library download fails, and HeadlessMC
-        // then reports success; the game can't start from that install, so remove it and retry.
+        if (process.exitValue() != 0) return "${File(command[command.indexOf("-jar") + 1]).name} exited with ${process.exitValue()}"
+        // Forge's and NeoForge's installers carry on when a library download fails and then report
+        // success; the game can't start from that install, so remove it and retry.
         if (INCOMPLETE_INSTALL !in output) return null
-        findVersion(mcdir, mc, loader)?.let { deleteTree(mcdir.resolve("versions/$it")) }
+        findVersion(mcdir, mc, loader, build)?.let { deleteTree(mcdir.resolve("versions/$it")) }
         return "the installer couldn't download some libraries"
     }
 
-    private fun findVersion(mcdir: File, mc: String, loader: String): String? {
-        val pinned = loaderVersion.orNull
-        return mcdir.resolve("versions").listFiles().orEmpty()
+    private fun findVersion(mcdir: File, mc: String, loader: String, build: String): String? =
+        mcdir.resolve("versions").listFiles().orEmpty()
             .map { it.resolve(it.name + ".json") }
             .filter { json ->
-                if (!json.isFile) return@filter false
                 val vid = json.parentFile.name
                 val lower = vid.lowercase()
-                readJson(json).str("inheritsFrom") == mc && LOADER_IDS.getValue(loader) in lower &&
-                    !(loader == "forge" && "neoforge" in lower) && (pinned == null || pinned in vid)
+                LOADER_IDS.getValue(loader) in lower && !(loader == "forge" && "neoforge" in lower) && build in vid &&
+                    json.isFile && readVersionFile(json)?.str("inheritsFrom") == mc
             }
             .maxByOrNull { it.lastModified() }
             ?.parentFile?.name
+
+    /** Reads a version file, repairing the one entry old Forge installers break; null if it's unreadable. */
+    private fun readVersionFile(file: File): JsonObject? {
+        fun parse(text: String) = runCatching { Json.parseToJsonElement(text) as JsonObject }.getOrNull()
+        val text = file.readText()
+        parse(text)?.let { return it }
+        // Forge 1.11–1.12.1 installers add the optional Mercurius library, and installed headless they
+        // write its entry without the name (`{ , "url": ... }`). Drop the entry: the game doesn't need it.
+        val repaired = text.replace(BROKEN_OPTIONAL, "")
+        return parse(repaired)?.also { file.writeText(repaired) }
+    }
+
+    /**
+     * Downloads Mojang's Java runtime [component] (as its launcher does) into the work directory;
+     * returns its java executable, or null when Mojang publishes none for this platform.
+     */
+    private fun mojangJava(work: File, component: String): String? {
+        val platform = when {
+            IS_ARM -> return null
+            IS_WINDOWS -> "windows-x64"
+            OS_NAME == "osx" -> "mac-os"
+            else -> "linux"
+        }
+        val home = work.resolve("java/$component")
+        val installed = home.resolve(".installed")
+        if (installed.exists()) return home.resolve(installed.readText().trim()).path
+        val index = work.resolve("java/all.json")
+        if (!fetch(JAVA_RUNTIMES_URL, index, null)) throw GradleException("couldn't download Mojang's Java runtime list")
+        val manifestUrl = (readJson(index).obj(platform)?.arr(component)?.firstOrNull() as? JsonObject)
+            ?.obj("manifest")?.str("url") ?: return null
+        val manifest = work.resolve("java/$component.json")
+        if (!fetch(manifestUrl, manifest, null)) throw GradleException("couldn't download Mojang's $component manifest")
+        val files = readJson(manifest).obj("files").orEmpty().mapValues { it.value as JsonObject }
+        deleteTree(home)
+        logger.lifecycle("Downloading Mojang's $component Java runtime")
+        val downloads = files.filterValues { it.str("type") == "file" }.entries.associate { (path, entry) ->
+            val raw = entry.obj("downloads")!!.obj("raw")!!
+            home.resolve(path) to (raw.str("url")!! to raw.str("sha1"))
+        }
+        if (!fetchAll(downloads)) throw GradleException("couldn't download Mojang's $component Java runtime")
+        for ((path, entry) in files) {
+            val file = home.resolve(path)
+            when (entry.str("type")) {
+                "directory" -> file.mkdirs()
+                "file" -> if ((entry["executable"] as? JsonPrimitive)?.content == "true") file.setExecutable(true)
+                "link" -> if (!IS_WINDOWS) {
+                    file.parentFile.mkdirs()
+                    Files.createSymbolicLink(file.toPath(), File(entry.str("target")!!).toPath())
+                }
+            }
+        }
+        val exe = files.keys.firstOrNull { it.endsWith("/bin/java") || it.endsWith("/bin/java.exe") || it == "bin/java" || it == "bin/java.exe" }
+            ?: throw GradleException("Mojang's $component runtime has no java executable")
+        installed.writeText(exe)
+        return home.resolve(exe).path
+    }
+
+    private fun extractEntry(jar: File, name: String, target: File) {
+        ZipFile(jar).use { zip ->
+            val entry = zip.getEntry(name) ?: throw GradleException("$jar has no $name")
+            target.parentFile.mkdirs()
+            zip.getInputStream(entry).use { input -> target.outputStream().use { input.copyTo(it) } }
+        }
     }
 
     // --- fixture --------------------------------------------------------------------------------
@@ -326,13 +427,7 @@ abstract class RuntimeTest : DefaultTask() {
 
         if (downloads.isNotEmpty()) {
             logger.lifecycle("Downloading ${downloads.size} libraries")
-            val pool = Executors.newFixedThreadPool(DOWNLOAD_THREADS)
-            try {
-                pool.invokeAll(downloads.map { (file, source) -> Callable { fetch(source.first, file, source.second) } })
-                    .forEach { it.get() }
-            } finally {
-                pool.shutdownNow()
-            }
+            fetchAll(downloads)
         }
         if (!client.exists()) {
             if (!baseClient.exists()) throw GradleException("no client jar for $baseId")
@@ -381,7 +476,9 @@ abstract class RuntimeTest : DefaultTask() {
             legacy.split(Regex("\\s+")).filter { it.isNotEmpty() }.map(::expand)
         }
         val mainClass = versions.firstNotNullOf { it.str("mainClass") }
-        val command = listOf(java, "-Xmx2G") + extraJvm + jvm + mainClass + game
+        // Forge 49.0.2 (1.20.3) looks for `libraries` in the working directory unless told where it is;
+        // Mojang's launcher runs it from .minecraft, where that holds.
+        val command = listOf(java, "-Xmx2G", "-DlibraryDirectory=${libdir.path}") + extraJvm + jvm + mainClass + game
         logger.lifecycle("Launching $version with $java (timeout ${seconds}s)")
         val process = start(command, gamedir, log)
         try {
@@ -443,6 +540,17 @@ abstract class RuntimeTest : DefaultTask() {
         }
         if (!url.isNullOrEmpty()) downloads[path] = url to info.str("sha1")
         return path
+    }
+
+    /** Downloads each file from its URL in parallel, checking SHA-1s; returns whether all succeeded. */
+    private fun fetchAll(downloads: Map<File, Pair<String, String?>>): Boolean {
+        val pool = Executors.newFixedThreadPool(DOWNLOAD_THREADS)
+        try {
+            return pool.invokeAll(downloads.map { (file, source) -> Callable { fetch(source.first, file, source.second) } })
+                .map { it.get() }.all { it }
+        } finally {
+            pool.shutdownNow()
+        }
     }
 
     /** Downloads [url] to [file], checking [sha1] when given; returns whether it succeeded. */
@@ -563,6 +671,16 @@ abstract class RuntimeTest : DefaultTask() {
     private companion object {
         const val HMC_VERSION = "2.10.0"
         const val HMC_URL = "https://github.com/headlesshq/headlessmc/releases/download/$HMC_VERSION/headlessmc-launcher-$HMC_VERSION.jar"
+        const val FORGE_MAVEN = "https://maven.minecraftforge.net/net/minecraftforge/forge"
+        const val JAVA_RUNTIMES_URL =
+            "https://launchermeta.mojang.com/v1/products/java-runtime/2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json"
+
+        /**
+         * Forge 34.1.27–36.2.24 crash on Java 8u321 and newer (ModLauncher calls a JDK-internal
+         * constructor that changed), and these releases have no fixed build.
+         */
+        val LEGACY_JAVA_FORGE = setOf("1.16.3", "1.16.4")
+        val BROKEN_OPTIONAL = Regex(""",\s*\{\s*,\s*"url"\s*:\s*"[^"]*"\s*}""")
         const val FIXTURE_MAIN = "io.github.etcherfx.tailgate.core.SelfTestFixture"
         const val FIXTURE_TIMEOUT = 300L
         const val INSTALL_ATTEMPTS = 5

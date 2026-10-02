@@ -102,7 +102,7 @@ The `runtimeTest` task launches a real game with the merged jar and runs Tailgat
 
 It needs only a JDK. The game runs on JDK 8, 17, 21 or 25, whichever is the oldest its release supports (1.17.x runs on Java 17). Gradle finds those JDKs in the usual install locations or downloads them. Point it at other locations with `-Porg.gradle.java.installations.paths=<jdk>,<jdk>`. Downloads and game directories go to `build/runtime-test`; pass `-Ptailgate.runtimeDir=<dir>` to use another directory.
 
-It installs Minecraft with [HeadlessMC](https://github.com/headlesshq/headlessmc), fails the task unless the self-test passes, and never waits for input. A window opens while the game runs; on Linux, wrap the command in `xvfb-run`. CI runs it for a smoke set of releases on every push, and for every release on tags.
+It installs Minecraft and the loader build listed in `targets.toml` with [HeadlessMC](https://github.com/headlesshq/headlessmc) (`--loader-version` picks another), fails the task unless the self-test passes, and never waits for input. A window opens while the game runs; on Linux, wrap the command in `xvfb-run`. CI runs it for a smoke set of releases on every push, and for every release on tags.
 
 ## Security model
 
