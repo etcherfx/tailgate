@@ -43,6 +43,7 @@ class TailgateMergePlugin : Plugin<Project> {
             nodeJars.set(nodesDir)
             targetsFile.set(project.layout.projectDirectory.file("targets.toml"))
             licenseFile.set(project.layout.projectDirectory.file("LICENSE"))
+            thirdPartyLicenses.set(project.layout.projectDirectory.dir("licenses"))
             modVersion.set(version)
             outputJar.set(project.layout.buildDirectory.file("libs/tailgate-$version.jar"))
             doFirst { nodesDir.get().asFile.mkdirs() }

@@ -51,6 +51,11 @@ abstract class MergeJar : DefaultTask() {
     @get:PathSensitive(PathSensitivity.NONE)
     abstract val licenseFile: RegularFileProperty
 
+    /** License texts of bundled third-party code, copied under `META-INF/licenses/`. */
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val thirdPartyLicenses: DirectoryProperty
+
     @get:Input
     abstract val modVersion: Property<String>
 
@@ -130,6 +135,11 @@ abstract class MergeJar : DefaultTask() {
         for ((name, text) in Metadata.files(version)) entries[name] = text.toByteArray()
         val license = licenseFile.get().asFile.readBytes()
         entries["META-INF/LICENSE_tailgate"] = license
+        // The Kotlin stdlib jar carries no license files, so the shaded classes' licenses come from the repo.
+        val licenses = thirdPartyLicenses.get().asFile
+        licenses.walk().filter { it.isFile }.forEach {
+            entries["META-INF/licenses/" + it.relativeTo(licenses).invariantSeparatorsPath] = it.readBytes()
+        }
         entries["META-INF/MANIFEST.MF"] = (
             "Manifest-Version: 1.0\r\n" +
                 "Implementation-Title: Tailgate\r\n" +
