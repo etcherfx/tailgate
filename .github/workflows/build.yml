@@ -11,6 +11,10 @@ on:
         description: Runtime-test every node instead of the smoke set
         type: boolean
         default: false
+      release-dry-run:
+        description: Release dry run (check the release notes and test every node, without publishing)
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -25,8 +29,44 @@ jobs:
     outputs:
       build: ${{ steps.matrix.outputs.build }}
       runtime: ${{ steps.matrix.outputs.runtime }}
+      version: ${{ steps.version.outputs.version }}
+    env:
+      RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.release-dry-run }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # tags, for the Full Changelog link
+      - name: Read the version and check the tag
+        id: version
+        run: |
+          version="$(sed -n 's/^mod\.version=//p' gradle.properties)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]] \
+            || { echo "::error::mod.version '$version' is not SemVer"; exit 1; }
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match mod.version $version"; exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Release notes and Full Changelog link
+        if: env.RELEASE == 'true'
+        env:
+          TAG: v${{ steps.version.outputs.version }}
+        run: |
+          notes=".github/release-notes/$TAG.md"
+          [[ -f "$notes" ]] || { echo "::error::missing $notes"; exit 1; }
+          ref="$TAG"; git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || ref=HEAD # dry run before tagging
+          # The previous version tag; a stable release skips pre-releases (tags with "-").
+          stable=(); [[ "$TAG" == *-* ]] || stable=(--exclude '*-*')
+          prev="$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude "$TAG" "${stable[@]}" "$ref" 2>/dev/null || true)"
+          base="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          if [[ -n "$prev" ]]; then link="$base/compare/$prev...$TAG"; else link="$base/commits/$TAG"; fi
+          { cat "$notes"; printf '\n**Full Changelog**: %s\n' "$link"; } > release-notes.md
+          cat release-notes.md >> "$GITHUB_STEP_SUMMARY"
+      - if: env.RELEASE == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-notes
+          path: release-notes.md
+          if-no-files-found: error
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
@@ -35,9 +75,9 @@ jobs:
         with:
           cache-read-only: true
       - id: matrix
-        # Tags and manual runs with all-runtime launch every node; other runs launch the smoke set.
+        # Releases, dry runs and manual runs with all-runtime launch every node; other runs launch the smoke set.
         env:
-          ALL_RUNTIME: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.all-runtime }}
+          ALL_RUNTIME: ${{ env.RELEASE == 'true' || inputs.all-runtime }}
         run: >
           ./gradlew ciMatrix $([ "$ALL_RUNTIME" = true ] && echo --all-runtime)
           --output "$GITHUB_OUTPUT" -q --console=plain -Ptailgate.nodes=none
@@ -193,7 +233,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [merge, runtime]
+    needs: [plan, merge, runtime]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -202,7 +242,21 @@ jobs:
         with:
           name: tailgate-jar
           path: dist
-      - uses: softprops/action-gh-release@v3
+      - uses: actions/download-artifact@v8
         with:
+          name: release-notes
+      # Create a draft, attach the jar, then publish: immutable releases are locked once published.
+      - uses: softprops/action-gh-release@v3
+        id: release
+        with:
+          name: Tailgate v${{ needs.plan.outputs.version }}
+          body_path: release-notes.md
           files: dist/tailgate-*.jar
-          generate_release_notes: true
+          fail_on_unmatched_files: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          draft: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+        run: gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F draft=false --jq .html_url
