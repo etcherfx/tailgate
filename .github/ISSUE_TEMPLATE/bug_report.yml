@@ -1,0 +1,64 @@
+name: Bug report
+description: Something in Tailgate doesn't work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Please search existing issues first. Logs can contain your friends' server addresses, so remove any you don't want public.
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+      description: What did you expect to happen, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Multiplayer and click Tailgate
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Tailgate version
+      description: From the jar's name, e.g. tailgate-0.1.0.jar.
+    validations:
+      required: true
+  - type: input
+    id: minecraft
+    attributes:
+      label: Minecraft version
+      placeholder: "1.20.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: loader
+    attributes:
+      label: Mod loader
+      options:
+        - Fabric
+        - Quilt
+        - Forge
+        - NeoForge
+    validations:
+      required: true
+  - type: input
+    id: loader-version
+    attributes:
+      label: Loader version
+      description: Optional, e.g. 47.4.0 for Forge or 0.19.5 for Fabric Loader.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Other mods, Java version and OS
+      description: Optional. A list of your other mods helps when the problem only happens alongside them.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Optional. The relevant part of logs/latest.log, or the crash report.
+      render: text

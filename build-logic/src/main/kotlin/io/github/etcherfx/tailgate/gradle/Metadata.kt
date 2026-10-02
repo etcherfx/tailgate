@@ -2,7 +2,7 @@ package io.github.etcherfx.tailgate.gradle
 
 /** Loader metadata for the merged jar. Every loader reads only its own file and ignores the rest. */
 object Metadata {
-    private const val DESCRIPTION = "Join a friend's Tailscale Funnel Minecraft server without a Tailscale account."
+    private const val DESCRIPTION = "A Minecraft mod for joining a friend's Tailscale Funnel server without Tailscale or an account."
     private const val LICENSE = "LGPL-3.0-only"
 
     fun files(version: String): Map<String, String> {
