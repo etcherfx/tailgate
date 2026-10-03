@@ -4,8 +4,8 @@
 
 <div align="center">
 
+<a href="https://modrinth.com/mod/tailgate"><img alt="modrinth" height="56" src="https://cdn.jsdelivr.net/npm/@intergrav/devins-badges@3/assets/cozy/available/modrinth_vector.svg"></a>
 <img alt="fabric" height="56" src="https://cdn.jsdelivr.net/npm/@intergrav/devins-badges@3/assets/cozy/supported/fabric_vector.svg">
-<img alt="quilt" height="56" src="https://cdn.jsdelivr.net/npm/@intergrav/devins-badges@3/assets/cozy/supported/quilt_vector.svg">
 <img alt="forge" height="56" src="https://cdn.jsdelivr.net/npm/@intergrav/devins-badges@3/assets/cozy/supported/forge_vector.svg">
 <img alt="neoforge" height="56" src="https://cdn.jsdelivr.net/npm/@intergrav/devins-badges@3/assets/cozy/supported/neoforge_vector.svg">
 
@@ -32,7 +32,7 @@ Tailgate is client-only. It does nothing on a dedicated server, and the server d
 
 ## Player guide
 
-1. Download `tailgate-<version>.jar` from the [latest release](https://github.com/etcherfx/tailgate/releases/latest) and put it in your `mods` folder. Fabric doesn't need Fabric API.
+1. Download Tailgate from [Modrinth](https://modrinth.com/mod/tailgate) or the [latest release](https://github.com/etcherfx/tailgate/releases/latest) and put the jar in your `mods` folder. Fabric doesn't need Fabric API.
 2. Start Minecraft and open **Multiplayer**.
 3. Click **Tailgate** in the top-right corner.
 4. Fill in the form:
